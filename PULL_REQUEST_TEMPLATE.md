@@ -4,7 +4,7 @@
  - [ ] Have you added an explanation of what your changes do and why you'd like them to be included?
  - [ ] Have you updated or added documentation for the change, as applicable?
  - [ ] Have you tested your changes on all related environments with successful results, as applicable?
-
+ - [ ] Have you updated the manual and Ansible installs if required?
 
 
 **Type of Changes:**
