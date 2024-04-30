@@ -21,6 +21,7 @@ import (
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
 
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -30,6 +31,9 @@ import (
 func (r *PGAdminReconciler) findPGAdminsForPostgresCluster(
 	ctx context.Context, cluster client.Object,
 ) []*v1beta1.PGAdmin {
+
+	// fmt.Printf("\n\nIN findPGAdminsForPostgresCluster...\n\n")
+
 	var (
 		matching []*v1beta1.PGAdmin
 		pgadmins v1beta1.PGAdminList
@@ -44,6 +48,10 @@ func (r *PGAdminReconciler) findPGAdminsForPostgresCluster(
 	}) == nil {
 		for i := range pgadmins.Items {
 			for _, serverGroup := range pgadmins.Items[i].Spec.ServerGroups {
+				if serverGroup.PostgresClusterName == cluster.GetName() {
+					matching = append(matching, &pgadmins.Items[i])
+					continue
+				}
 				if selector, err := naming.AsSelector(serverGroup.PostgresClusterSelector); err == nil {
 					if selector.Matches(labels.Set(cluster.GetLabels())) {
 						matching = append(matching, &pgadmins.Items[i])
@@ -52,6 +60,11 @@ func (r *PGAdminReconciler) findPGAdminsForPostgresCluster(
 			}
 		}
 	}
+
+	// if len(matching) > 1 {
+	// 	fmt.Printf("\n\nMATCHING: %v\n\n", matching[0].Name)
+	// }
+
 	return matching
 }
 
@@ -66,8 +79,26 @@ func (r *PGAdminReconciler) getClustersForPGAdmin(
 	var err error
 	var selector labels.Selector
 
+	// fmt.Printf("\n\nIN getClustersForPGAdmin...\n\n")
+
 	for _, serverGroup := range pgAdmin.Spec.ServerGroups {
+		cluster := &v1beta1.PostgresCluster{}
+		// fmt.Println("CLUSTER NAME1: " + cluster.Name)
+		if serverGroup.PostgresClusterName != "" {
+			// fmt.Println("CLUSTER NAME2: " + serverGroup.PostgresClusterName)
+			err = r.Get(ctx, types.NamespacedName{
+				Name:      serverGroup.PostgresClusterName,
+				Namespace: pgAdmin.GetNamespace(),
+			}, cluster)
+			if err == nil {
+				matching[serverGroup.Name] = &v1beta1.PostgresClusterList{
+					Items: []v1beta1.PostgresCluster{*cluster},
+				}
+			}
+			continue
+		}
 		if selector, err = naming.AsSelector(serverGroup.PostgresClusterSelector); err == nil {
+			// fmt.Println("IN SELECTOR BLOCK")
 			var filteredList v1beta1.PostgresClusterList
 			err = r.List(ctx, &filteredList,
 				client.InNamespace(pgAdmin.Namespace),
@@ -78,6 +109,19 @@ func (r *PGAdminReconciler) getClustersForPGAdmin(
 			}
 		}
 	}
+
+	// fmt.Printf("\n\nMATCHING: %v\nERROR: %v\n\n", matching, err)
+	// if len(matching["hippo"].Items) > 0 {
+	// 	for i := range matching["hippo"].Items {
+	// 		fmt.Printf("\nMATCHING[hippo].Items[%d]: %v\n\n", i, matching["hippo"].Items[i].Name)
+	// 	}
+	// }
+
+	// if len(matching["hippo+"].Items) > 0 {
+	// 	for i := range matching["hippo+"].Items {
+	// 		fmt.Printf("\nMATCHING[hippo+].Items[%d]: %v\n\n", i, matching["hippo+"].Items[i].Name)
+	// 	}
+	// }
 
 	return matching, err
 }
