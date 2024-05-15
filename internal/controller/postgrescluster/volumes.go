@@ -57,6 +57,25 @@ func (r *Reconciler) observePersistentVolumeClaims(
 			))
 	}
 
+	// Update the
+	for i := range cluster.Spec.InstanceSets {
+		for j, _ := range cluster.Status.InstanceSets {
+			var largestVolume int64
+			if cluster.Spec.InstanceSets[i].Name == cluster.Status.InstanceSets[j].Name {
+				for _, vol := range volumes.Items {
+					if cluster.Status.InstanceSets[j].Name == vol.Labels["postgres-operator.crunchydata.com/instance-set"] {
+						// Get the size of the largest volume associated with this instance set.
+						if largestVolume < vol.Status.Capacity.Storage().Value() {
+							largestVolume = vol.Status.Capacity.Storage().Value()
+						}
+					}
+
+				}
+				cluster.Status.InstanceSets[j].ObservedPGDataVolumeSize = largestVolume
+			}
+		}
+	}
+
 	resizing := metav1.Condition{
 		Type:    v1beta1.PersistentVolumeResizing,
 		Message: "One or more volumes are changing size",

@@ -320,7 +320,31 @@ func (r *Reconciler) observeInstances(
 
 	observed := newObservedInstances(cluster, runners.Items, pods.Items)
 
+	fmt.Println("IN OBSERVE INSTANCE: CLUSTER STATUS")
+	if len(cluster.Status.InstanceSets) > 0 {
+		fmt.Printf("Volume Size: %v\n", cluster.Status.InstanceSets[0].ObservedPGDataVolumeSize)
+		fmt.Printf("Volume Request: %v\n", cluster.Status.InstanceSets[0].PGDataVolumeRequest)
+		fmt.Printf("Desired Volume Request: %v\n", cluster.Status.InstanceSets[0].DesiredPGDataVolume)
+	}
+
 	// Fill out status sorted by set name.
+
+	type volumeInfo struct {
+		pgDataVolumeSize           int64
+		pgDataVolumeRequest        int64
+		desiredPGDataVolumeRequest int64
+	}
+
+	// store pgData volume sizes by instance name
+	volumeMap := make(map[string]volumeInfo)
+	for _, is := range cluster.Status.InstanceSets {
+		volumeMap[is.Name] = volumeInfo{
+			pgDataVolumeSize:           is.ObservedPGDataVolumeSize,
+			pgDataVolumeRequest:        is.PGDataVolumeRequest,
+			desiredPGDataVolumeRequest: is.DesiredPGDataVolume,
+		}
+	}
+
 	cluster.Status.InstanceSets = cluster.Status.InstanceSets[:0]
 	for _, name := range observed.setNames.List() {
 		status := v1beta1.PostgresInstanceSetStatus{Name: name}
@@ -334,12 +358,85 @@ func (r *Reconciler) observeInstances(
 			if matches, known := instance.PodMatchesPodTemplate(); known && matches {
 				status.UpdatedReplicas++
 			}
+			// store saved volume size values
+			status.ObservedPGDataVolumeSize = volumeMap[name].pgDataVolumeSize
+			status.PGDataVolumeRequest = volumeMap[name].pgDataVolumeRequest
+			status.DesiredPGDataVolume = volumeMap[name].desiredPGDataVolumeRequest
 		}
 
 		cluster.Status.InstanceSets = append(cluster.Status.InstanceSets, status)
 	}
 
+	fmt.Printf("\n\nAFTER OBSERVE SETS STATUS\n")
+	if len(cluster.Status.InstanceSets) > 0 {
+		fmt.Printf("Volume Size: %v\n", cluster.Status.InstanceSets[0].ObservedPGDataVolumeSize)
+		fmt.Printf("Volume Request: %v\n", cluster.Status.InstanceSets[0].PGDataVolumeRequest)
+		fmt.Printf("Desired Volume Request: %v\n", cluster.Status.InstanceSets[0].DesiredPGDataVolume)
+	}
+
 	return observed, err
+}
+
+// manageAutoGrowValues....
+func (r *Reconciler) manageAutoGrowValues(ctx context.Context, cluster *v1beta1.PostgresCluster) {
+
+	// Loop through the PostgresCluster's instance sets.
+	for i := range cluster.Spec.InstanceSets {
+		// Only grow if a limit is set and the feature gate is enabled.
+		// **************************************** TODO(tjmoore): Add in feature gate check ****************************************************************
+		if !cluster.Spec.InstanceSets[i].DataVolumeClaimSpec.Resources.Limits.Storage().IsZero() {
+
+			// Loop through the PostgresCluster's instance set status blocks.
+			for j, _ := range cluster.Status.InstanceSets {
+				// if the name from the spec matches the name from status, continue.
+				if cluster.Spec.InstanceSets[i].Name == cluster.Status.InstanceSets[j].Name {
+					// Set the current storage value. Initially grab the value from the spec. If the status value is
+					// greater, update to match.
+					currentStorageValue := cluster.Spec.InstanceSets[i].DataVolumeClaimSpec.Resources.Requests.Storage().Value()
+					if currentStorageValue < cluster.Status.InstanceSets[j].ObservedPGDataVolumeSize {
+						currentStorageValue = cluster.Status.InstanceSets[j].ObservedPGDataVolumeSize
+					}
+
+					// If the storage request status value is less than the determined current value, set the correct status value.
+					// One reason this may be required is that the storage provider may only offer discrete volume sizes rather
+					// rather than values down to the byte level. This step ensures the status request value matches reality.
+					if cluster.Status.InstanceSets[j].PGDataVolumeRequest < currentStorageValue {
+						cluster.Status.InstanceSets[j].PGDataVolumeRequest = currentStorageValue
+					}
+
+					// If the desired storage and current storage size are equal (i.e. a resize is not in progress) and
+					// the current storage request is less than the actual volume size, update to the current observed PVC size.
+					if cluster.Status.InstanceSets[j].DesiredPGDataVolume == cluster.Status.InstanceSets[j].PGDataVolumeRequest &&
+						cluster.Status.InstanceSets[j].PGDataVolumeRequest < cluster.Status.InstanceSets[j].ObservedPGDataVolumeSize {
+						cluster.Status.InstanceSets[j].DesiredPGDataVolume = cluster.Status.InstanceSets[j].ObservedPGDataVolumeSize
+					}
+
+					// If the desired volume size is larger than the size observed and has already requested, update the
+					// request values in the spec and status. Keep setting this until the observed storage size matches
+					// or exceeds the desired value.
+					//
+					// Note: In cases where the storage provider updates the value beyond the request (i.e. a request for
+					// 1.5Gi is updated to 2Gi), there may be a window of time where the requested "desired" value is less
+					// than the value of the volume in reality. This can lead to warnings that will resolve once the current
+					// storage status value is updated.
+					if cluster.Status.InstanceSets[j].DesiredPGDataVolume > currentStorageValue &&
+						cluster.Status.InstanceSets[j].DesiredPGDataVolume > cluster.Status.InstanceSets[j].PGDataVolumeRequest {
+						// ******************************** QUESTION: this is fine for SCs that support resize; what do we do with this value when the resize fails? *********************
+						cluster.Status.InstanceSets[j].PGDataVolumeRequest = cluster.Status.InstanceSets[j].DesiredPGDataVolume
+					}
+
+					// If the volume needs to grow, the desired size is less than limit but greater than the observed value
+					// and the current and observed values set in the status are equal.
+					desiredStorageRequest := int64(float64(currentStorageValue) * 1.5)
+					if true && desiredStorageRequest < cluster.Spec.InstanceSets[i].DataVolumeClaimSpec.Resources.Limits.Storage().Value() &&
+						desiredStorageRequest > cluster.Status.InstanceSets[j].ObservedPGDataVolumeSize &&
+						cluster.Status.InstanceSets[j].PGDataVolumeRequest == cluster.Status.InstanceSets[j].ObservedPGDataVolumeSize {
+						cluster.Status.InstanceSets[j].DesiredPGDataVolume = desiredStorageRequest
+					}
+				}
+			}
+		}
+	}
 }
 
 // +kubebuilder:rbac:groups="",resources="pods",verbs={list}

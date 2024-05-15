@@ -29,6 +29,7 @@ import (
 	"github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -617,6 +618,26 @@ func (r *Reconciler) reconcilePostgresDataVolume(
 		instanceSpec.Metadata.GetLabelsOrNil(),
 		labelMap,
 	)
+
+	for i, _ := range cluster.Status.InstanceSets {
+		if instanceSpec.Name == cluster.Status.InstanceSets[i].Name {
+			// From the spec and three status values, get the largest value.
+			volumeRequestSize := instanceSpec.DataVolumeClaimSpec.Resources.Requests.Storage().Value()
+			if cluster.Status.InstanceSets[i].PGDataVolumeRequest > volumeRequestSize {
+				volumeRequestSize = cluster.Status.InstanceSets[i].PGDataVolumeRequest
+			}
+			if cluster.Status.InstanceSets[i].DesiredPGDataVolume > volumeRequestSize {
+				volumeRequestSize = cluster.Status.InstanceSets[i].DesiredPGDataVolume
+			}
+			if cluster.Status.InstanceSets[i].ObservedPGDataVolumeSize > volumeRequestSize {
+				volumeRequestSize = cluster.Status.InstanceSets[i].ObservedPGDataVolumeSize
+			}
+
+			instanceSpec.DataVolumeClaimSpec.Resources.Requests = corev1.ResourceList{
+				corev1.ResourceStorage: *resource.NewQuantity(volumeRequestSize, resource.BinarySI),
+			}
+		}
+	}
 
 	pvc.Spec = instanceSpec.DataVolumeClaimSpec
 
