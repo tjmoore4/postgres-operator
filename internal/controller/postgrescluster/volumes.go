@@ -57,6 +57,29 @@ func (r *Reconciler) observePersistentVolumeClaims(
 			))
 	}
 
+	for i := range cluster.Spec.InstanceSets {
+		for j, _ := range cluster.Status.InstanceSets {
+			fmt.Println("PVCs:")
+			if cluster.Spec.InstanceSets[i].Name == cluster.Status.InstanceSets[j].Name {
+				for _, vol := range volumes.Items {
+					fmt.Printf("Name: %v\n", vol.Name)
+					fmt.Printf("Labels: %v\n", vol.Labels)
+					fmt.Printf("Instance Label value: %v\n", vol.Labels["postgres-operator.crunchydata.com/instance"])
+					fmt.Printf("Request: %v\n", vol.Spec.Resources.Requests.Storage())
+					fmt.Printf("Limits: %v\n", vol.Spec.Resources.Limits.Storage())
+					fmt.Printf("Status: %v\n\n", vol.Status.Capacity.Storage())
+					fmt.Printf("Status in bytes: %v\n\n", vol.Status.Capacity.Storage().AsDec().UnscaledBig().Int64())
+					if cluster.Status.InstanceSets[j].Name == vol.Labels["postgres-operator.crunchydata.com/instance-set"] {
+						fmt.Println("SETTING STORAGE STATUS VALUE")
+						fmt.Println(vol.Status.Capacity.Storage())
+						cluster.Status.InstanceSets[j].PGDataVolumeSize = vol.Status.Capacity.Storage().Value()
+					}
+					fmt.Println("end PVCs")
+				}
+			}
+		}
+	}
+
 	resizing := metav1.Condition{
 		Type:    v1beta1.PersistentVolumeResizing,
 		Message: "One or more volumes are changing size",

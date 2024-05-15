@@ -24,6 +24,7 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/pkg/errors"
@@ -618,6 +619,65 @@ func (r *Reconciler) reconcilePostgresDataVolume(
 		labelMap,
 	)
 
+	// // dvcsCopy := instanceSpec.DataVolumeClaimSpec
+	// // if a limit is set...
+	// if !instanceSpec.DataVolumeClaimSpec.Resources.Limits.Storage().IsZero() {
+
+	// 	// fmt.Printf("\n\nLIMIT CHECK\n")
+	// 	// fmt.Println(cluster.Name)
+	// 	// fmt.Println(instance.Name)
+
+	exec := func(_ context.Context, stdin io.Reader, stdout, stderr io.Writer, command ...string) error {
+		return r.PodExec(instance.Namespace, instance.Name+"-0", naming.ContainerDatabase, stdin, stdout, stderr, command...)
+	}
+
+	stdout, _, _ := Executor(exec).DFTotalExec(ctx)
+	// fmt.Println("*******************EXEC OUTPUT****************")
+	// fmt.Println(stdout)
+	// fmt.Println(stderr)
+	// fmt.Println(err)
+	// fmt.Println("*******************EXEC OUTPUT****************")
+
+	var dfTotal int64
+	if stdout != "" {
+		dfTotal, err = strconv.ParseInt(strings.TrimSpace(stdout), 10, 64)
+		fmt.Println(err)
+		dfTotal = dfTotal * 1024
+		// fmt.Println("*******************EXEC OUTPUT****************")
+		// fmt.Printf("DF TOTAL: %v \n", dfTotal)
+	}
+
+	stdout2, _, _ := Executor(exec).DFUsedExec(ctx)
+	// fmt.Println("*******************EXEC OUTPUT****************")
+	// fmt.Println(stdout2)
+	// fmt.Println(stderr2)
+	// fmt.Println(err)
+	// fmt.Println("*******************EXEC OUTPUT****************")
+
+	if stdout2 != "" {
+		var dfUsed int64
+		dfUsed, err = strconv.ParseInt(strings.TrimSpace(stdout2), 10, 64)
+		fmt.Println(err)
+		dfUsed = dfUsed * 1024
+		// fmt.Printf("DF USED: %v \n", dfUsed)
+		// fmt.Println("*******************EXEC OUTPUT****************")
+	}
+
+	// stdout3, _, _ := Executor(exec).DFHRTotalExec(ctx)
+	// var dfHRTotal string
+	// if stdout3 != "" {
+	// 	dfHRTotal = stdout3
+	// 	fmt.Println(err)
+	// 	fmt.Println("*******************EXEC OUTPUT****************")
+	// 	fmt.Printf("DF HR TOTAL: %v \n", dfHRTotal)
+	// 	q, err := resource.ParseQuantity("1Gi")
+	// 	if err != nil {
+	// 		fmt.Println(err)
+	// 	}
+	// 	fmt.Println(q.AsInt64())
+	// 	fmt.Println("*******************EXEC OUTPUT****************")
+	// }
+
 	pvc.Spec = instanceSpec.DataVolumeClaimSpec
 
 	if err == nil {
@@ -626,6 +686,41 @@ func (r *Reconciler) reconcilePostgresDataVolume(
 	}
 
 	return pvc, err
+}
+
+// Executor provides methods for calling "psql".
+type Executor func(
+	ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, command ...string,
+) error
+
+func (exec Executor) DFTotalExec(ctx context.Context) (string, string, error) {
+	var stdout, stderr bytes.Buffer
+	// err := exec(ctx, nil, &stdout, &stderr, append([]string{"df", "-h", "/pgdata"})...)
+	// df -P /pgdata | awk 'NR==2 {print $2}'
+	// err := exec(ctx, nil, &stdout, &stderr, append([]string{"df", "-P", "/pgdata", "|", "awk", "'NR==2 {print $2}'"})...)
+	script := `df -P /pgdata | awk 'NR==2 {print $2}'`
+	err := exec(ctx, nil, &stdout, &stderr, append([]string{"bash", "-ceu", "--", script})...)
+	return stdout.String(), stderr.String(), err
+}
+
+func (exec Executor) DFHRTotalExec(ctx context.Context) (string, string, error) {
+	var stdout, stderr bytes.Buffer
+	// err := exec(ctx, nil, &stdout, &stderr, append([]string{"df", "-h", "/pgdata"})...)
+	// df -P /pgdata | awk 'NR==2 {print $2}'
+	// err := exec(ctx, nil, &stdout, &stderr, append([]string{"df", "-P", "/pgdata", "|", "awk", "'NR==2 {print $2}'"})...)
+	script := `df -h /pgdata | awk 'NR==2 {print $2}'`
+	err := exec(ctx, nil, &stdout, &stderr, append([]string{"bash", "-ceu", "--", script})...)
+	return stdout.String(), stderr.String(), err
+}
+
+func (exec Executor) DFUsedExec(ctx context.Context) (string, string, error) {
+	var stdout, stderr bytes.Buffer
+	// err := exec(ctx, nil, &stdout, &stderr, append([]string{"df", "-h", "/pgdata"})...)
+	// df -P /pgdata | awk 'NR==2 {print $2}'
+	// err := exec(ctx, nil, &stdout, &stderr, append([]string{"df", "-P", "/pgdata", "|", "awk", "'NR==2 {print $2}'"})...)
+	script := `df -P /pgdata | awk 'NR==2 {print $3}'`
+	err := exec(ctx, nil, &stdout, &stderr, append([]string{"bash", "-ceu", "--", script})...)
+	return stdout.String(), stderr.String(), err
 }
 
 // +kubebuilder:rbac:groups="",resources="persistentvolumeclaims",verbs={create,patch}

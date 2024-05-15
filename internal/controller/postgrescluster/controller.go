@@ -198,7 +198,19 @@ func (r *Reconciler) Reconcile(
 	// occurs while attempting to patch the status, while otherwise simply returning the
 	// Result and error variables that are populated while reconciling the PostgresCluster.
 	patchClusterStatus := func() (reconcile.Result, error) {
+		fmt.Println("IN PATCH")
+		if len(cluster.Status.InstanceSets) > 0 {
+			fmt.Printf("Volume Size: %v\n", cluster.Status.InstanceSets[0].PGDataVolumeSize)
+			fmt.Printf("Volume Request: %v\n", cluster.Status.InstanceSets[0].PGDataVolumeRequest)
+			fmt.Printf("Desired Volume Request: %v\n", cluster.Status.InstanceSets[0].DesiredPGDataVolume)
+		}
 		if !equality.Semantic.DeepEqual(before.Status, cluster.Status) {
+			fmt.Println("IN PATCH, FIRST IF")
+			if len(cluster.Status.InstanceSets) > 0 {
+				fmt.Printf("Volume Size: %v\n", cluster.Status.InstanceSets[0].PGDataVolumeSize)
+				fmt.Printf("Volume Request: %v\n", cluster.Status.InstanceSets[0].PGDataVolumeRequest)
+				fmt.Printf("Desired Volume Request: %v\n", cluster.Status.InstanceSets[0].DesiredPGDataVolume)
+			}
 			// NOTE(cbandy): Kubernetes prior to v1.16.10 and v1.17.6 does not track
 			// managed fields on the status subresource: https://issue.k8s.io/88901
 			if err := errors.WithStack(r.Client.Status().Patch(
@@ -244,6 +256,13 @@ func (r *Reconciler) Reconcile(
 	// Set huge_pages = try if a hugepages resource limit > 0, otherwise set "off"
 	postgres.SetHugePages(cluster, &pgParameters)
 
+	fmt.Println("IN CONTROLLER 1")
+	if len(cluster.Status.InstanceSets) > 0 {
+		fmt.Printf("Volume Size: %v\n", cluster.Status.InstanceSets[0].PGDataVolumeSize)
+		fmt.Printf("Volume Request: %v\n", cluster.Status.InstanceSets[0].PGDataVolumeRequest)
+		fmt.Printf("Desired Volume Request: %v\n", cluster.Status.InstanceSets[0].DesiredPGDataVolume)
+	}
+
 	if err == nil {
 		rootCA, err = r.reconcileRootCertificate(ctx, cluster)
 	}
@@ -266,6 +285,10 @@ func (r *Reconciler) Reconcile(
 	}
 	if err == nil {
 		clusterVolumes, err = r.configureExistingPVCs(ctx, cluster, clusterVolumes)
+	}
+	if err == nil {
+		// RETURN AN ERROR AT SOME POINT.....
+		r.manageAutoGrowValues(ctx, cluster)
 	}
 	if err == nil {
 		instances, err = r.observeInstances(ctx, cluster)
@@ -344,6 +367,14 @@ func (r *Reconciler) Reconcile(
 			ctx, cluster, clusterConfigMap, clusterReplicationSecret, rootCA,
 			clusterPodService, instanceServiceAccount, instances, patroniLeaderService,
 			primaryCertificate, clusterVolumes, exporterQueriesConfig, exporterWebConfig)
+		// _, err = patchClusterStatus()
+	}
+
+	fmt.Println("IN CONTROLLER 2")
+	if len(cluster.Status.InstanceSets) > 0 {
+		fmt.Printf("Volume Size: %v\n", cluster.Status.InstanceSets[0].PGDataVolumeSize)
+		fmt.Printf("Volume Request: %v\n", cluster.Status.InstanceSets[0].PGDataVolumeRequest)
+		fmt.Printf("Desired Volume Request: %v\n", cluster.Status.InstanceSets[0].DesiredPGDataVolume)
 	}
 
 	if err == nil {
@@ -351,6 +382,13 @@ func (r *Reconciler) Reconcile(
 	}
 	if err == nil {
 		err = r.reconcilePostgresUsers(ctx, cluster, instances)
+	}
+
+	fmt.Println("IN CONTROLLER 3")
+	if len(cluster.Status.InstanceSets) > 0 {
+		fmt.Printf("Volume Size: %v\n", cluster.Status.InstanceSets[0].PGDataVolumeSize)
+		fmt.Printf("Volume Request: %v\n", cluster.Status.InstanceSets[0].PGDataVolumeRequest)
+		fmt.Printf("Desired Volume Request: %v\n", cluster.Status.InstanceSets[0].DesiredPGDataVolume)
 	}
 
 	if err == nil {
@@ -372,6 +410,13 @@ func (r *Reconciler) Reconcile(
 		// This is after [Reconciler.rolloutInstances] to ensure that recreating
 		// Pods takes precedence.
 		err = r.handlePatroniRestarts(ctx, cluster, instances)
+	}
+
+	fmt.Println("IN CONTROLLER 4")
+	if len(cluster.Status.InstanceSets) > 0 {
+		fmt.Printf("Volume Size: %v\n", cluster.Status.InstanceSets[0].PGDataVolumeSize)
+		fmt.Printf("Volume Request: %v\n", cluster.Status.InstanceSets[0].PGDataVolumeRequest)
+		fmt.Printf("Desired Volume Request: %v\n", cluster.Status.InstanceSets[0].DesiredPGDataVolume)
 	}
 
 	// at this point everything reconciled successfully, and we can update the

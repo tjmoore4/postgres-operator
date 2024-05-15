@@ -29,6 +29,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -320,7 +321,31 @@ func (r *Reconciler) observeInstances(
 
 	observed := newObservedInstances(cluster, runners.Items, pods.Items)
 
+	fmt.Println("IN OBSERVE INSTANCE: CLUSTER STATUS")
+	if len(cluster.Status.InstanceSets) > 0 {
+		fmt.Printf("Volume Size: %v\n", cluster.Status.InstanceSets[0].PGDataVolumeSize)
+		fmt.Printf("Volume Request: %v\n", cluster.Status.InstanceSets[0].PGDataVolumeRequest)
+		fmt.Printf("Desired Volume Request: %v\n", cluster.Status.InstanceSets[0].DesiredPGDataVolume)
+	}
+
 	// Fill out status sorted by set name.
+
+	type volumeInfo struct {
+		pgDataVolumeSize           int64
+		pgDataVolumeRequest        int64
+		desiredPGDataVolumeRequest int64
+	}
+
+	// store pgData volume sizes by instance name
+	volumeMap := make(map[string]volumeInfo)
+	for _, is := range cluster.Status.InstanceSets {
+		volumeMap[is.Name] = volumeInfo{
+			pgDataVolumeSize:           is.PGDataVolumeSize,
+			pgDataVolumeRequest:        is.PGDataVolumeRequest,
+			desiredPGDataVolumeRequest: is.DesiredPGDataVolume,
+		}
+	}
+
 	cluster.Status.InstanceSets = cluster.Status.InstanceSets[:0]
 	for _, name := range observed.setNames.List() {
 		status := v1beta1.PostgresInstanceSetStatus{Name: name}
@@ -334,12 +359,90 @@ func (r *Reconciler) observeInstances(
 			if matches, known := instance.PodMatchesPodTemplate(); known && matches {
 				status.UpdatedReplicas++
 			}
+			// store saved volume size values
+			status.PGDataVolumeSize = volumeMap[name].pgDataVolumeSize
+			status.PGDataVolumeRequest = volumeMap[name].pgDataVolumeRequest
+			status.DesiredPGDataVolume = volumeMap[name].desiredPGDataVolumeRequest
 		}
 
 		cluster.Status.InstanceSets = append(cluster.Status.InstanceSets, status)
 	}
 
+	fmt.Printf("\n\nAFTER OBSERVE SETS STATUS\n")
+	if len(cluster.Status.InstanceSets) > 0 {
+		fmt.Printf("Volume Size: %v\n", cluster.Status.InstanceSets[0].PGDataVolumeSize)
+		fmt.Printf("Volume Request: %v\n", cluster.Status.InstanceSets[0].PGDataVolumeRequest)
+		fmt.Printf("Desired Volume Request: %v\n", cluster.Status.InstanceSets[0].DesiredPGDataVolume)
+	}
+
 	return observed, err
+}
+
+// manageAutoGrowValues....
+func (r *Reconciler) manageAutoGrowValues(ctx context.Context, cluster *v1beta1.PostgresCluster) {
+
+	// Loop through the PostgresCluster's instance sets.
+	for i := range cluster.Spec.InstanceSets {
+		// Only grow if a limit is set and the feature gate is enabled.
+		// ******************************* TODO(tjmoore): Add in feature gate check ****************************************************************
+		if !cluster.Spec.InstanceSets[i].DataVolumeClaimSpec.Resources.Limits.Storage().IsZero() {
+
+			fmt.Println("INSTANCE NAME: " + cluster.Spec.InstanceSets[i].Name)
+
+			// Loop through the PostgresCluster's instance set status blocks.
+			for j, _ := range cluster.Status.InstanceSets {
+				// if the name from the spec matches the name from status, continue.
+				if cluster.Spec.InstanceSets[i].Name == cluster.Status.InstanceSets[j].Name {
+					// Set the current storage value. Initially grab the value from the spec. If the status value is
+					// greater, update to match.
+					currentStorageValue := cluster.Spec.InstanceSets[i].DataVolumeClaimSpec.Resources.Requests.Storage().Value()
+					if currentStorageValue < cluster.Status.InstanceSets[j].PGDataVolumeSize {
+						currentStorageValue = cluster.Status.InstanceSets[j].PGDataVolumeSize
+					}
+
+					// If the storage request status value is less than the determined current value, set the correct status value.
+					// One reason this may be required is that the storage provider may only offer discrete volume sizes rather
+					// rather than values down to the byte level. This step ensures the status request value matches reality.
+					if cluster.Status.InstanceSets[j].PGDataVolumeRequest < currentStorageValue {
+						fmt.Printf("\n\n******************************\nSETTING STATUS TO CURRENT REQUEST VALUE:\n%v\n\n", currentStorageValue)
+						cluster.Status.InstanceSets[j].PGDataVolumeRequest = currentStorageValue
+					}
+
+					// If the desired storage and current storage size are equal (i.e. a resize is not in progress) and
+					// the current storage request is less than the actual volume size, update to the current observed PVC size.
+					if cluster.Status.InstanceSets[j].DesiredPGDataVolume == cluster.Status.InstanceSets[j].PGDataVolumeRequest &&
+						cluster.Status.InstanceSets[j].PGDataVolumeRequest < cluster.Status.InstanceSets[j].PGDataVolumeSize {
+						cluster.Status.InstanceSets[j].DesiredPGDataVolume = cluster.Status.InstanceSets[j].PGDataVolumeSize
+					}
+
+					// If the desired volume size is larger than the size observed and already requested, update the request
+					// values in the spec and status. Keep setting this until the observed storage size matches or exceeds
+					// the desired value.
+					// Note: In cases where the storage provider updates the value beyond the request (i.e. a request for
+					// 1.5Gi is updated to 2Gi), there may be a window of time where the requested "desired" value is less
+					// than the value of the volume in reality. This can lead to warnings that will resolve once the current
+					// storage status value is updated.
+					fmt.Printf("\nVALUE TO BE SET: %v\n\n", *resource.NewQuantity(cluster.Status.InstanceSets[j].DesiredPGDataVolume, resource.BinarySI))
+					if cluster.Status.InstanceSets[j].DesiredPGDataVolume > currentStorageValue &&
+						cluster.Status.InstanceSets[j].DesiredPGDataVolume > cluster.Status.InstanceSets[j].PGDataVolumeRequest {
+						fmt.Printf("\n\n******************************\nSETTING REQUEST VALUE TO DESIRED VALUE:\n%v\n\n", cluster.Status.InstanceSets[j].DesiredPGDataVolume)
+						cluster.Spec.InstanceSets[i].DataVolumeClaimSpec.Resources.Requests = corev1.ResourceList{
+							corev1.ResourceStorage: *resource.NewQuantity(cluster.Status.InstanceSets[j].DesiredPGDataVolume, resource.BinarySI),
+						}
+						// QUESTION: this is fine for SCs that support resize; what do we do with this value when the resize fails?
+						cluster.Status.InstanceSets[j].PGDataVolumeRequest = cluster.Status.InstanceSets[j].DesiredPGDataVolume
+					}
+
+					desiredStorageRequest := int64(float64(currentStorageValue) * 1.5)
+					// if need to grow and desired size is less than limit
+					if true && desiredStorageRequest < cluster.Spec.InstanceSets[i].DataVolumeClaimSpec.Resources.Limits.Storage().Value() {
+						fmt.Printf("\n\n******************************\nSETTING DESIRED REQUEST STATUS:\n%v\n\n", desiredStorageRequest)
+						cluster.Status.InstanceSets[j].DesiredPGDataVolume = desiredStorageRequest
+					}
+				}
+			}
+		}
+	}
 }
 
 // +kubebuilder:rbac:groups="",resources="pods",verbs={list}
@@ -1083,6 +1186,15 @@ func (r *Reconciler) reconcileInstance(
 	}
 	if err == nil {
 		postgresDataVolume, err = r.reconcilePostgresDataVolume(ctx, cluster, spec, instance, clusterVolumes)
+		fmt.Println("IN RECONCILE INSTANCE")
+		if len(cluster.Status.InstanceSets) > 0 {
+			fmt.Printf("Volume Size: %v\n", cluster.Status.InstanceSets[0].PGDataVolumeSize)
+			fmt.Printf("Volume Request: %v\n", cluster.Status.InstanceSets[0].PGDataVolumeRequest)
+			fmt.Printf("Desired Volume Request: %v\n", cluster.Status.InstanceSets[0].DesiredPGDataVolume)
+		}
+		if len(cluster.Spec.InstanceSets) > 0 {
+			fmt.Printf("Volume Size from spec: %v\n", cluster.Spec.InstanceSets[0].DataVolumeClaimSpec.Resources.Requests.Storage())
+		}
 	}
 	if err == nil {
 		postgresWALVolume, err = r.reconcilePostgresWALVolume(ctx, cluster, spec, instance, observed, clusterVolumes)
