@@ -29,6 +29,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -46,6 +47,13 @@ import (
 	"github.com/crunchydata/postgres-operator/internal/pki"
 	"github.com/crunchydata/postgres-operator/internal/postgres"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
+)
+
+const (
+	ConditionDiskStarved        = "DiskStarved"
+	ConditionAutoGrowInProgress = "AutoGrowInProgress"
+	EventAutoGrowStarted        = "AutoGrowStarted"
+	EventAutoGrowCompleted      = "AutoGrowCompleted"
 )
 
 // Instance represents a single PostgreSQL instance of a PostgresCluster.
@@ -320,7 +328,29 @@ func (r *Reconciler) observeInstances(
 
 	observed := newObservedInstances(cluster, runners.Items, pods.Items)
 
+	fmt.Println("IN OBSERVE INSTANCE: CLUSTER STATUS")
+	for _, is := range cluster.Status.InstanceSets {
+		fmt.Println(is.Name)
+		fmt.Printf("Volume Size: %v\n", is.ObservedPGDataVolumeSize)
+		fmt.Printf("Desired Volume Request: %v\n", is.DesiredPGDataVolume)
+	}
+
 	// Fill out status sorted by set name.
+
+	type volumeInfo struct {
+		pgDataVolumeSize           int64
+		desiredPGDataVolumeRequest int64
+	}
+
+	// store pgData volume sizes by instance name
+	volumeMap := make(map[string]volumeInfo)
+	for _, is := range cluster.Status.InstanceSets {
+		volumeMap[is.Name] = volumeInfo{
+			pgDataVolumeSize:           is.ObservedPGDataVolumeSize,
+			desiredPGDataVolumeRequest: is.DesiredPGDataVolume,
+		}
+	}
+
 	cluster.Status.InstanceSets = cluster.Status.InstanceSets[:0]
 	for _, name := range observed.setNames.List() {
 		status := v1beta1.PostgresInstanceSetStatus{Name: name}
@@ -334,12 +364,118 @@ func (r *Reconciler) observeInstances(
 			if matches, known := instance.PodMatchesPodTemplate(); known && matches {
 				status.UpdatedReplicas++
 			}
+			// store saved volume size values
+			status.ObservedPGDataVolumeSize = volumeMap[name].pgDataVolumeSize
+			status.DesiredPGDataVolume = volumeMap[name].desiredPGDataVolumeRequest
 		}
 
 		cluster.Status.InstanceSets = append(cluster.Status.InstanceSets, status)
 	}
 
+	fmt.Printf("\n\nAFTER OBSERVE SETS STATUS\n")
+	for _, is := range cluster.Status.InstanceSets {
+		fmt.Println(is.Name)
+		fmt.Printf("Volume Size: %v\n", is.ObservedPGDataVolumeSize)
+		fmt.Printf("Desired Volume Request: %v\n", is.DesiredPGDataVolume)
+	}
+
 	return observed, err
+}
+
+// manageAutoGrow updates the statuses and conditions that control pgData volume resizing
+// once the DiskStarved condition has been set.
+func (r *Reconciler) manageAutoGrow(ctx context.Context, cluster *v1beta1.PostgresCluster) {
+	// If no volumes are currently resizing, the relevant conditions can be removed.
+	removeConditions := true
+
+	// Loop through the PostgresCluster's instance sets.
+	for i := range cluster.Spec.InstanceSets {
+		// Only grow if a limit is set and the feature gate is enabled.
+		// **************************************** TODO(tjmoore): Add in feature gate check ****************************************************************
+		if !cluster.Spec.InstanceSets[i].DataVolumeClaimSpec.Resources.Limits.Storage().IsZero() {
+			// Loop through the PostgresCluster's instance set status blocks.
+			for j, _ := range cluster.Status.InstanceSets {
+
+				// if the name from the spec matches the name from status, continue.
+				if cluster.Spec.InstanceSets[i].Name == cluster.Status.InstanceSets[j].Name {
+					// Set the current storage value. Initially grab the value from the spec. If either status value is
+					// greater, update to match.
+					currentStorageValue := cluster.Spec.InstanceSets[i].DataVolumeClaimSpec.Resources.Requests.Storage().Value()
+					if currentStorageValue < cluster.Status.InstanceSets[j].DesiredPGDataVolume {
+						currentStorageValue = cluster.Status.InstanceSets[j].DesiredPGDataVolume
+					}
+					if currentStorageValue < cluster.Status.InstanceSets[j].ObservedPGDataVolumeSize {
+						currentStorageValue = cluster.Status.InstanceSets[j].ObservedPGDataVolumeSize
+					}
+
+					// get relevant conditions
+					diskStarved := meta.FindStatusCondition(cluster.Status.Conditions, ConditionDiskStarved)
+					autoGrow := meta.FindStatusCondition(cluster.Status.Conditions, ConditionAutoGrowInProgress)
+
+					// If the disk starved condition has been set but the auto-grow condition is not,
+					// do not remove the conditions.
+					if diskStarved != nil && autoGrow == nil {
+						removeConditions = false
+					}
+
+					// If the observed volume size is greater than zero, it is greater than or equal to the desired size
+					// and the auto-grow condition is set, update the desired size value.
+					// If this is not the case for any instance set, do not remove the conditions as resize is still in progress.
+					if cluster.Status.InstanceSets[j].ObservedPGDataVolumeSize != 0 &&
+						cluster.Status.InstanceSets[j].ObservedPGDataVolumeSize >= cluster.Status.InstanceSets[j].DesiredPGDataVolume &&
+						autoGrow != nil && autoGrow.Status == metav1.ConditionTrue {
+						cluster.Status.InstanceSets[j].DesiredPGDataVolume = cluster.Status.InstanceSets[j].ObservedPGDataVolumeSize
+					} else {
+						removeConditions = false
+					}
+
+					// Set the desired storage value and the volume resize condition when:
+					// 1. The desired size is less than limit or equal to the limit AND
+					// 2. The volume needs to grow AND
+					// 3. The desired size is greater than the observed value AND
+					// 4. The observed value is not zero AND
+					// 5. Auto-grow is not in progress
+					desiredStorageRequest := int64(float64(currentStorageValue) * 1.5)
+					// if the desired value is over the limit, set the value to equal the limit
+					if desiredStorageRequest > cluster.Spec.InstanceSets[i].DataVolumeClaimSpec.Resources.Limits.Storage().Value() {
+						desiredStorageRequest = cluster.Spec.InstanceSets[i].DataVolumeClaimSpec.Resources.Limits.Storage().Value()
+					}
+					if desiredStorageRequest < cluster.Spec.InstanceSets[i].DataVolumeClaimSpec.Resources.Limits.Storage().Value() &&
+						diskStarved != nil && diskStarved.Status == metav1.ConditionTrue &&
+						desiredStorageRequest > cluster.Status.InstanceSets[j].ObservedPGDataVolumeSize &&
+						cluster.Status.InstanceSets[j].ObservedPGDataVolumeSize > 0 &&
+						autoGrow == nil {
+
+						cluster.Status.InstanceSets[j].DesiredPGDataVolume = desiredStorageRequest
+
+						// record an event indicating auto-grow started
+						r.Recorder.Event(cluster, corev1.EventTypeNormal, EventAutoGrowStarted,
+							"pgData volume auto-grow started for "+cluster.Name+"/"+cluster.Spec.InstanceSets[i].Name)
+
+						// set auto-grow in progress condition
+						meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+							ObservedGeneration: cluster.GetGeneration(),
+							Type:               ConditionAutoGrowInProgress,
+							Status:             metav1.ConditionTrue,
+							Reason:             "VolumeSizeUpdated",
+							Message:            "Volume Resize in progress.",
+						})
+					}
+				}
+			}
+		}
+	}
+	// If all instance volume values have been initialized and updated to the desired
+	// values, remove the relevant conditions. The second check ensures we don't
+	// try to remove conditions before cluster status initialization.
+	if removeConditions && len(cluster.Status.InstanceSets) > 0 {
+		// if meta.FindStatusCondition(cluster.Status.Conditions, ConditionAutoGrowInProgress) != nil {
+		r.Recorder.Event(cluster, corev1.EventTypeNormal, EventAutoGrowCompleted,
+			"pgData volume auto-grow completed for "+cluster.Name)
+
+		meta.RemoveStatusCondition(&cluster.Status.Conditions, ConditionDiskStarved)
+		meta.RemoveStatusCondition(&cluster.Status.Conditions, ConditionAutoGrowInProgress)
+	}
 }
 
 // +kubebuilder:rbac:groups="",resources="pods",verbs={list}
@@ -1090,6 +1226,9 @@ func (r *Reconciler) reconcileInstance(
 	if err == nil {
 		tablespaceVolumes, err = r.reconcileTablespaceVolumes(ctx, cluster, spec, instance, clusterVolumes)
 	}
+
+	fmt.Printf("\nCHECK HERE0\n\n")
+
 	if err == nil {
 		postgres.InstancePod(
 			ctx, cluster, spec,
@@ -1097,13 +1236,19 @@ func (r *Reconciler) reconcileInstance(
 			postgresDataVolume, postgresWALVolume, tablespaceVolumes,
 			&instance.Spec.Template.Spec)
 
+		fmt.Printf("\nCHECK HERE1\n\n")
+
 		addPGBackRestToInstancePodSpec(
 			cluster, instanceCertificates, &instance.Spec.Template.Spec)
+
+		fmt.Printf("\nCHECK HERE1.5\n\n")
 
 		err = patroni.InstancePod(
 			ctx, cluster, clusterConfigMap, clusterPodService, patroniLeaderService,
 			spec, instanceCertificates, instanceConfigMap, &instance.Spec.Template)
 	}
+
+	fmt.Printf("\nCHECK HERE2\n\n")
 
 	// Add pgMonitor resources to the instance Pod spec
 	if err == nil {
@@ -1130,12 +1275,16 @@ func (r *Reconciler) reconcileInstance(
 		addDevSHM(&instance.Spec.Template)
 	}
 
+	fmt.Printf("\nCHECK HERE2.1\n\n")
+
 	if err == nil {
 		err = errors.WithStack(r.apply(ctx, instance))
 	}
 	if err == nil {
 		log.V(1).Info("reconciled instance", "instance", instance.Name)
 	}
+
+	fmt.Printf("\nCHECK HERE3\n\n")
 
 	return err
 }

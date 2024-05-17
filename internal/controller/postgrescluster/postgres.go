@@ -29,6 +29,7 @@ import (
 	"github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -618,12 +619,38 @@ func (r *Reconciler) reconcilePostgresDataVolume(
 		labelMap,
 	)
 
+	// Capture the largest pgData volume size currently defined for a given instance set.
+	var volumeRequestSize int64
+	for i, _ := range cluster.Status.InstanceSets {
+		if instanceSpec.Name == cluster.Status.InstanceSets[i].Name {
+			// From the spec and three status values, get the largest value per instance set.
+			volumeRequestSize = instanceSpec.DataVolumeClaimSpec.Resources.Requests.Storage().Value()
+			if cluster.Status.InstanceSets[i].DesiredPGDataVolume > volumeRequestSize {
+				volumeRequestSize = cluster.Status.InstanceSets[i].DesiredPGDataVolume
+			}
+			if cluster.Status.InstanceSets[i].ObservedPGDataVolumeSize > volumeRequestSize {
+				volumeRequestSize = cluster.Status.InstanceSets[i].ObservedPGDataVolumeSize
+			}
+		}
+
+	}
+	fmt.Printf("\n EXISTING REQUEST: \n%v\n\n", instanceSpec.DataVolumeClaimSpec.Resources.Requests.Storage())
+	fmt.Printf("\nVOLUME SIZE REQUESTED: %v\n\n", volumeRequestSize)
+	// instanceSpec.DataVolumeClaimSpec.Resources.Requests.Storage().Set(volumeRequestSize)
+	instanceSpec.DataVolumeClaimSpec.Resources.Requests = corev1.ResourceList{
+		corev1.ResourceStorage: *resource.NewQuantity(volumeRequestSize, resource.BinarySI),
+	}
+
 	pvc.Spec = instanceSpec.DataVolumeClaimSpec
+
+	fmt.Printf("\n\n%v\n\n", pvc.Spec)
 
 	if err == nil {
 		err = r.handlePersistentVolumeClaimError(cluster,
 			errors.WithStack(r.apply(ctx, pvc)))
 	}
+
+	fmt.Printf("\nAFTER APPLY. ERROR: %v\n\n", err)
 
 	return pvc, err
 }
