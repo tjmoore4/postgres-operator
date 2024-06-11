@@ -12,6 +12,11 @@ spec:
       repoName: repo1
 
   postgresVersion: ${KUTTL_PG_VERSION}
+  patroni:
+    dynamicConfiguration:
+      postgresql:
+        parameters:
+          encryption_key_command: 'echo 0aa19145816bd81a8371a725ef223900'
   instances:
     - dataVolumeClaimSpec: { accessModes: [ReadWriteOnce], resources: { requests: { storage: 1Gi } } }
   backups:

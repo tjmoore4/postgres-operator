@@ -5,6 +5,11 @@ metadata:
   labels: { postgres-operator-test: kuttl }
 spec:
   postgresVersion: ${KUTTL_PG_VERSION}
+  patroni:
+    dynamicConfiguration:
+      postgresql:
+        parameters:
+          encryption_key_command: 'echo 0aa19145816bd81a8371a725ef223900'
   instances:
     - name: instance1
       replicas: 1
@@ -23,6 +28,11 @@ metadata:
   labels: { postgres-operator-test: kuttl }
 spec:
   postgresVersion: ${KUTTL_PG_VERSION}
+  patroni:
+    dynamicConfiguration:
+      postgresql:
+        parameters:
+          encryption_key_command: 'echo 0aa19145816bd81a8371a725ef223900'
   instances:
     - name: instance1
       replicas: 1

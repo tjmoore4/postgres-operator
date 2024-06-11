@@ -16,6 +16,11 @@ spec:
     name: tablespace-script
     key: script.sql
   postgresVersion: ${KUTTL_PG_VERSION}
+  patroni:
+    dynamicConfiguration:
+      postgresql:
+        parameters:
+          encryption_key_command: 'echo 0aa19145816bd81a8371a725ef223900'
   instances:
     - name: instance1
       dataVolumeClaimSpec:

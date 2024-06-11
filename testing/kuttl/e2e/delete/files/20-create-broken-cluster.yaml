@@ -4,6 +4,11 @@ metadata:
   name: delete-not-running
 spec:
   postgresVersion: ${KUTTL_PG_VERSION}
+  patroni:
+    dynamicConfiguration:
+      postgresql:
+        parameters:
+          encryption_key_command: 'echo 0aa19145816bd81a8371a725ef223900'
   image: "example.com/does-not-exist"
   instances:
     - name: instance1

@@ -7,5 +7,10 @@ metadata:
 spec:
   # postgres version that is no longer available
   fromPostgresVersion: 10
-  toPostgresVersion: ${KUTTL_PG_UPGRADE_TO_VERSION}
+  topostgresVersion: ${KUTTL_PG_UPGRADE_TO_VERSION}
+  patroni:
+    dynamicConfiguration:
+      postgresql:
+        parameters:
+          encryption_key_command: 'echo 0aa19145816bd81a8371a725ef223900'
   postgresClusterName: major-upgrade-empty-image
