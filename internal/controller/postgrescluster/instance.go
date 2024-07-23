@@ -1376,10 +1376,10 @@ func addPGBackRestToInstancePodSpec(
 	ctx context.Context, cluster *v1beta1.PostgresCluster,
 	instanceCertificates *corev1.Secret, instancePod *corev1.PodSpec,
 ) {
-	if pgbackrest.DedicatedRepoHostEnabled(cluster) {
-		pgbackrest.AddServerToInstancePod(ctx, cluster, instancePod,
-			instanceCertificates.Name)
-	}
+	// if pgbackrest.DedicatedRepoHostEnabled(cluster) {
+	pgbackrest.AddServerToInstancePod(ctx, cluster, instancePod,
+		instanceCertificates.Name)
+	// }
 
 	pgbackrest.AddConfigToInstancePod(cluster, instancePod)
 }

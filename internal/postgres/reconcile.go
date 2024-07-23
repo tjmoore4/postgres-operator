@@ -176,6 +176,10 @@ func InstancePod(ctx context.Context,
 			Name:          naming.PortPostgreSQL,
 			ContainerPort: *inCluster.Spec.Port,
 			Protocol:      corev1.ProtocolTCP,
+		}, {
+			Name:          "test-pgbackrest",
+			ContainerPort: 8432,
+			Protocol:      corev1.ProtocolTCP,
 		}},
 
 		SecurityContext: initialize.RestrictedSecurityContext(),

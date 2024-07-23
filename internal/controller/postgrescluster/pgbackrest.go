@@ -1317,10 +1317,16 @@ func (r *Reconciler) reconcilePGBackRest(ctx context.Context,
 		meta.RemoveStatusCondition(&postgresCluster.Status.Conditions, ConditionRepoHostReady)
 	}
 
+	fmt.Println("************************************")
+	fmt.Println("BEFORE RECONCILEPGBACKRESTSECRET")
+	fmt.Println("************************************")
 	if err := r.reconcilePGBackRestSecret(ctx, postgresCluster, repoHost, rootCA); err != nil {
 		log.Error(err, "unable to reconcile pgBackRest secret")
 		result.Requeue = true
 	}
+	fmt.Println("************************************")
+	fmt.Println("AFTER RECONCILEPGBACKRESTSECRET")
+	fmt.Println("************************************")
 
 	// calculate hashes for the external repository configurations in the spec (e.g. for Azure,
 	// GCS and/or S3 repositories) as needed to properly detect changes to external repository
@@ -1943,6 +1949,10 @@ func (r *Reconciler) reconcilePGBackRestSecret(ctx context.Context,
 	cluster *v1beta1.PostgresCluster, repoHost *appsv1.StatefulSet,
 	rootCA *pki.RootCertificateAuthority) error {
 
+	fmt.Println("*************************************")
+	fmt.Println("IN RECONCILE SECRET")
+	fmt.Println("*************************************")
+
 	intent := &corev1.Secret{ObjectMeta: naming.PGBackRestSecret(cluster)}
 	intent.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Secret"))
 	intent.Type = corev1.SecretTypeOpaque
@@ -1960,12 +1970,19 @@ func (r *Reconciler) reconcilePGBackRestSecret(ctx context.Context,
 	err := errors.WithStack(client.IgnoreNotFound(
 		r.Client.Get(ctx, client.ObjectKeyFromObject(intent), existing)))
 
+	fmt.Println("IN RECONCILE SECRET ONE")
+
 	if err == nil {
 		err = r.setControllerReference(cluster, intent)
 	}
+
+	fmt.Println("IN RECONCILE SECRET TWO")
+
 	if err == nil {
 		err = pgbackrest.Secret(ctx, cluster, repoHost, rootCA, existing, intent)
 	}
+
+	fmt.Println("IN RECONCILE SECRET THREE")
 
 	// Delete the Secret when it exists and there is nothing we want to keep in it.
 	if err == nil && len(existing.UID) != 0 && len(intent.Data) == 0 {
@@ -1973,8 +1990,13 @@ func (r *Reconciler) reconcilePGBackRestSecret(ctx context.Context,
 			r.deleteControlled(ctx, cluster, existing)))
 	}
 
+	fmt.Println("IN RECONCILE SECRET FOUR")
+
 	// Write the Secret when there is something we want to keep in it.
 	if err == nil && len(intent.Data) != 0 {
+		fmt.Println("*************************************")
+		fmt.Println("APPLYING SECRET")
+		fmt.Println("*************************************")
 		err = errors.WithStack(r.apply(ctx, intent))
 	}
 	return err

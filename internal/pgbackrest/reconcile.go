@@ -17,6 +17,7 @@ package pgbackrest
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/pkg/errors"
@@ -124,14 +125,14 @@ func AddConfigToInstancePod(
 	secret.Secret.Name = naming.PGBackRestSecret(cluster).Name
 	secret.Secret.Optional = initialize.Bool(true)
 
-	if DedicatedRepoHostEnabled(cluster) {
-		configmap.ConfigMap.Items = append(
-			configmap.ConfigMap.Items, corev1.KeyToPath{
-				Key:  serverConfigMapKey,
-				Path: serverConfigProjectionPath,
-			})
-		secret.Secret.Items = append(secret.Secret.Items, clientCertificates()...)
-	}
+	// if DedicatedRepoHostEnabled(cluster) {
+	configmap.ConfigMap.Items = append(
+		configmap.ConfigMap.Items, corev1.KeyToPath{
+			Key:  serverConfigMapKey,
+			Path: serverConfigProjectionPath,
+		})
+	secret.Secret.Items = append(secret.Secret.Items, clientCertificates()...)
+	// }
 
 	// Start with a copy of projections specified in the cluster. Items later in
 	// the list take precedence over earlier items (that is, last write wins).
@@ -293,6 +294,10 @@ func addServerContainerAndVolume(
 	cluster *v1beta1.PostgresCluster, pod *corev1.PodSpec,
 	certificates []corev1.VolumeProjection, resources *corev1.ResourceRequirements,
 ) {
+	fmt.Println("************************************************")
+	fmt.Println("IN ADD SERVER CONTAINER AND VOLUME")
+	fmt.Println(certificates)
+	fmt.Println("************************************************")
 	serverVolumeMount := corev1.VolumeMount{
 		Name:      "pgbackrest-server",
 		MountPath: serverMountPath,
@@ -424,16 +429,16 @@ func InstanceCertificates(ctx context.Context,
 ) error {
 	var err error
 
-	if DedicatedRepoHostEnabled(inCluster) {
-		initialize.ByteMap(&outInstanceCertificates.Data)
+	// if DedicatedRepoHostEnabled(inCluster) {
+	initialize.ByteMap(&outInstanceCertificates.Data)
 
-		if err == nil {
-			outInstanceCertificates.Data[certInstanceSecretKey], err = certFile(inDNS)
-		}
-		if err == nil {
-			outInstanceCertificates.Data[certInstancePrivateKeySecretKey], err = certFile(inDNSKey)
-		}
+	if err == nil {
+		outInstanceCertificates.Data[certInstanceSecretKey], err = certFile(inDNS)
 	}
+	if err == nil {
+		outInstanceCertificates.Data[certInstancePrivateKeySecretKey], err = certFile(inDNSKey)
+	}
+	// }
 
 	return err
 }
@@ -528,39 +533,39 @@ func Secret(ctx context.Context,
 	var err error
 
 	// Save the CA and generate a TLS client certificate for the entire cluster.
-	if inRepoHost != nil {
-		initialize.ByteMap(&outSecret.Data)
+	// if inRepoHost != nil {
+	initialize.ByteMap(&outSecret.Data)
 
-		// The server verifies its "tls-server-auth" option contains the common
-		// name (CN) of the certificate presented by a client. The entire
-		// cluster uses a single client certificate so the "tls-server-auth"
-		// option can stay the same when PostgreSQL instances and repository
-		// hosts are added or removed.
-		leaf := &pki.LeafCertificate{}
-		commonName := clientCommonName(inCluster)
-		dnsNames := []string{commonName}
+	// The server verifies its "tls-server-auth" option contains the common
+	// name (CN) of the certificate presented by a client. The entire
+	// cluster uses a single client certificate so the "tls-server-auth"
+	// option can stay the same when PostgreSQL instances and repository
+	// hosts are added or removed.
+	leaf := &pki.LeafCertificate{}
+	commonName := clientCommonName(inCluster)
+	dnsNames := []string{commonName}
 
-		if err == nil {
-			// Unmarshal and validate the stored leaf. These first errors can
-			// be ignored because they result in an invalid leaf which is then
-			// correctly regenerated.
-			_ = leaf.Certificate.UnmarshalText(inSecret.Data[certClientSecretKey])
-			_ = leaf.PrivateKey.UnmarshalText(inSecret.Data[certClientPrivateKeySecretKey])
+	if err == nil {
+		// Unmarshal and validate the stored leaf. These first errors can
+		// be ignored because they result in an invalid leaf which is then
+		// correctly regenerated.
+		_ = leaf.Certificate.UnmarshalText(inSecret.Data[certClientSecretKey])
+		_ = leaf.PrivateKey.UnmarshalText(inSecret.Data[certClientPrivateKeySecretKey])
 
-			leaf, err = inRoot.RegenerateLeafWhenNecessary(leaf, commonName, dnsNames)
-			err = errors.WithStack(err)
-		}
-
-		if err == nil {
-			outSecret.Data[certAuthoritySecretKey], err = certFile(inRoot.Certificate)
-		}
-		if err == nil {
-			outSecret.Data[certClientPrivateKeySecretKey], err = certFile(leaf.PrivateKey)
-		}
-		if err == nil {
-			outSecret.Data[certClientSecretKey], err = certFile(leaf.Certificate)
-		}
+		leaf, err = inRoot.RegenerateLeafWhenNecessary(leaf, commonName, dnsNames)
+		err = errors.WithStack(err)
 	}
+
+	if err == nil {
+		outSecret.Data[certAuthoritySecretKey], err = certFile(inRoot.Certificate)
+	}
+	if err == nil {
+		outSecret.Data[certClientPrivateKeySecretKey], err = certFile(leaf.PrivateKey)
+	}
+	if err == nil {
+		outSecret.Data[certClientSecretKey], err = certFile(leaf.Certificate)
+	}
+	// }
 
 	// Generate a TLS server certificate for each repository host.
 	if inRepoHost != nil {
