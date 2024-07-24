@@ -101,18 +101,30 @@ func CreatePGBackRestConfigMapIntent(postgresCluster *v1beta1.PostgresCluster,
 	// create an empty map for the config data
 	initialize.StringMap(&cm.Data)
 
-	// addDedicatedHost := DedicatedRepoHostEnabled(postgresCluster)
+	addDedicatedHost := DedicatedRepoHostEnabled(postgresCluster)
 	pgdataDir := postgres.DataDirectory(postgresCluster)
 	// Port will always be populated, since the API will set a default of 5432 if not provided
 	pgPort := *postgresCluster.Spec.Port
+
 	cm.Data[CMInstanceKey] = iniGeneratedWarning +
 		populatePGInstanceConfigurationMap(
 			serviceName, serviceNamespace, repoHostName, pgdataDir,
 			config.FetchKeyCommand(&postgresCluster.Spec),
 			strconv.Itoa(postgresCluster.Spec.PostgresVersion),
-			pgPort, instanceNames, postgresCluster.Spec.Backups.PGBackRest.Repos,
+			pgPort, "", instanceNames, postgresCluster.Spec.Backups.PGBackRest.Repos,
 			postgresCluster.Spec.Backups.PGBackRest.Global,
 		).String()
+
+	for _, instanceName := range instanceNames {
+		cm.Data[instanceName+"_"+CMInstanceKey] = iniGeneratedWarning +
+			populatePGInstanceConfigurationMap(
+				serviceName, serviceNamespace, repoHostName, pgdataDir,
+				config.FetchKeyCommand(&postgresCluster.Spec),
+				strconv.Itoa(postgresCluster.Spec.PostgresVersion),
+				pgPort, instanceName, instanceNames, postgresCluster.Spec.Backups.PGBackRest.Repos,
+				postgresCluster.Spec.Backups.PGBackRest.Global,
+			).String()
+	}
 
 	// As the cluster transitions from having a repository host to having none,
 	// PostgreSQL instances that have not rolled out expect to mount a server
@@ -120,20 +132,25 @@ func CreatePGBackRestConfigMapIntent(postgresCluster *v1beta1.PostgresCluster,
 	// Kubernetes propagates their contents to those pods.
 	cm.Data[serverConfigMapKey] = ""
 
-	// if addDedicatedHost && repoHostName != "" {
-	cm.Data[serverConfigMapKey] = iniGeneratedWarning +
-		serverConfig(postgresCluster).String()
+	// Besides when a repo host is configured, the cluster needs the server
+	// configuration when performing backups from a standby (i.e. instance replica).
+	if addDedicatedHost && repoHostName != "" || StandbyBackupEnabled(postgresCluster) {
+		cm.Data[serverConfigMapKey] = iniGeneratedWarning +
+			serverConfig(postgresCluster).String()
+	}
 
-	// cm.Data[CMRepoKey] = iniGeneratedWarning +
-	// 	populateRepoHostConfigurationMap(
-	// 		serviceName, serviceNamespace,
-	// 		pgdataDir, config.FetchKeyCommand(&postgresCluster.Spec),
-	// 		strconv.Itoa(postgresCluster.Spec.PostgresVersion),
-	// 		pgPort, instanceNames,
-	// 		postgresCluster.Spec.Backups.PGBackRest.Repos,
-	// 		postgresCluster.Spec.Backups.PGBackRest.Global,
-	// 	).String()
-	// }
+	// The repo configuration is only needed when the repo host is enabled.
+	if addDedicatedHost && repoHostName != "" {
+		cm.Data[CMRepoKey] = iniGeneratedWarning +
+			populateRepoHostConfigurationMap(
+				serviceName, serviceNamespace,
+				pgdataDir, config.FetchKeyCommand(&postgresCluster.Spec),
+				strconv.Itoa(postgresCluster.Spec.PostgresVersion),
+				pgPort, instanceNames,
+				postgresCluster.Spec.Backups.PGBackRest.Repos,
+				postgresCluster.Spec.Backups.PGBackRest.Global,
+			).String()
+	}
 
 	cm.Data[ConfigHashKey] = configHash
 
@@ -279,8 +296,8 @@ mv "${pgdata}" "${pgdata}_bootstrap"`
 func populatePGInstanceConfigurationMap(
 	serviceName, serviceNamespace, repoHostName, pgdataDir,
 	fetchKeyCommand, postgresVersion string,
-	pgPort int32, pgHosts []string, repos []v1beta1.PGBackRestRepo,
-	globalConfig map[string]string,
+	pgPort int32, currentInstance string, pgHosts []string,
+	repos []v1beta1.PGBackRestRepo, globalConfig map[string]string,
 ) iniSectionSet {
 
 	// TODO(cbandy): pass a FQDN in already.
@@ -335,21 +352,28 @@ func populatePGInstanceConfigurationMap(
 	}
 
 	// set the configs for all PG hosts
-	for i, pgHost := range pgHosts {
-		// TODO(cbandy): pass a FQDN in already.
-		pgHostFQDN := pgHost + "-0." +
-			serviceName + "." + serviceNamespace + ".svc." +
-			naming.KubernetesClusterDomain(context.Background())
+	if currentInstance != "" && repoHostName == "" {
+		i := 2
+		for _, pgHost := range pgHosts {
+			if pgHost == currentInstance {
+				continue
+			}
+			// TODO(cbandy): pass a FQDN in already.
+			pgHostFQDN := pgHost + "-0." +
+				serviceName + "." + serviceNamespace + ".svc." +
+				naming.KubernetesClusterDomain(context.Background())
 
-		stanza.Set(fmt.Sprintf("pg%d-host", i+1), pgHostFQDN)
-		stanza.Set(fmt.Sprintf("pg%d-host-type", i+1), "tls")
-		stanza.Set(fmt.Sprintf("pg%d-host-ca-file", i+1), "/pgconf/tls/ca.crt")
-		stanza.Set(fmt.Sprintf("pg%d-host-cert-file", i+1), "/pgconf/tls/tls.crt")
-		stanza.Set(fmt.Sprintf("pg%d-host-key-file", i+1), "/pgconf/tls/tls.key")
+			stanza.Set(fmt.Sprintf("pg%d-host", i), pgHostFQDN)
+			stanza.Set(fmt.Sprintf("pg%d-host-type", i), "tls")
+			stanza.Set(fmt.Sprintf("pg%d-host-ca-file", i), "/etc/pgbackrest/conf.d/~postgres-operator/tls-ca.crt")
+			stanza.Set(fmt.Sprintf("pg%d-host-cert-file", i), "/etc/pgbackrest/conf.d/~postgres-operator/client-tls.crt")
+			stanza.Set(fmt.Sprintf("pg%d-host-key-file", i), "/etc/pgbackrest/conf.d/~postgres-operator/client-tls.key")
 
-		stanza.Set(fmt.Sprintf("pg%d-path", i+1), pgdataDir)
-		stanza.Set(fmt.Sprintf("pg%d-port", i+1), fmt.Sprint(pgPort))
-		stanza.Set(fmt.Sprintf("pg%d-socket-path", i+1), postgres.SocketDirectory)
+			stanza.Set(fmt.Sprintf("pg%d-path", i), pgdataDir)
+			stanza.Set(fmt.Sprintf("pg%d-port", i), fmt.Sprint(pgPort))
+			stanza.Set(fmt.Sprintf("pg%d-socket-path", i), postgres.SocketDirectory)
+			i++
+		}
 	}
 
 	return iniSectionSet{

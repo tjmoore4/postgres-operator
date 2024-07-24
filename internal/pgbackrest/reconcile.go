@@ -108,12 +108,20 @@ func AddRepoVolumesToPod(postgresCluster *v1beta1.PostgresCluster, template *cor
 // for an instance of cluster to pod. The database container and any pgBackRest
 // containers must already be in pod.
 func AddConfigToInstancePod(
-	cluster *v1beta1.PostgresCluster, pod *corev1.PodSpec,
+	cluster *v1beta1.PostgresCluster, pod *corev1.PodSpec, instanceName string,
 ) {
+	fmt.Println("**********************")
+	fmt.Println("INSTANCE NAME")
+	fmt.Println(instanceName)
+	fmt.Println("**********************")
+	key := CMInstanceKey
+	if instanceName != "" {
+		key = instanceName + "_" + CMInstanceKey
+	}
 	configmap := corev1.VolumeProjection{ConfigMap: &corev1.ConfigMapProjection{}}
 	configmap.ConfigMap.Name = naming.PGBackRestConfig(cluster).Name
 	configmap.ConfigMap.Items = []corev1.KeyToPath{
-		{Key: CMInstanceKey, Path: CMInstanceKey},
+		{Key: key, Path: CMInstanceKey},
 		{Key: ConfigHashKey, Path: ConfigHashKey},
 	}
 
@@ -125,14 +133,14 @@ func AddConfigToInstancePod(
 	secret.Secret.Name = naming.PGBackRestSecret(cluster).Name
 	secret.Secret.Optional = initialize.Bool(true)
 
-	// if DedicatedRepoHostEnabled(cluster) {
-	configmap.ConfigMap.Items = append(
-		configmap.ConfigMap.Items, corev1.KeyToPath{
-			Key:  serverConfigMapKey,
-			Path: serverConfigProjectionPath,
-		})
-	secret.Secret.Items = append(secret.Secret.Items, clientCertificates()...)
-	// }
+	if DedicatedRepoHostEnabled(cluster) || StandbyBackupEnabled(cluster) {
+		configmap.ConfigMap.Items = append(
+			configmap.ConfigMap.Items, corev1.KeyToPath{
+				Key:  serverConfigMapKey,
+				Path: serverConfigProjectionPath,
+			})
+		secret.Secret.Items = append(secret.Secret.Items, clientCertificates()...)
+	}
 
 	// Start with a copy of projections specified in the cluster. Items later in
 	// the list take precedence over earlier items (that is, last write wins).
@@ -429,16 +437,16 @@ func InstanceCertificates(ctx context.Context,
 ) error {
 	var err error
 
-	// if DedicatedRepoHostEnabled(inCluster) {
-	initialize.ByteMap(&outInstanceCertificates.Data)
+	if DedicatedRepoHostEnabled(inCluster) || StandbyBackupEnabled(inCluster) {
+		initialize.ByteMap(&outInstanceCertificates.Data)
 
-	if err == nil {
-		outInstanceCertificates.Data[certInstanceSecretKey], err = certFile(inDNS)
+		if err == nil {
+			outInstanceCertificates.Data[certInstanceSecretKey], err = certFile(inDNS)
+		}
+		if err == nil {
+			outInstanceCertificates.Data[certInstancePrivateKeySecretKey], err = certFile(inDNSKey)
+		}
 	}
-	if err == nil {
-		outInstanceCertificates.Data[certInstancePrivateKeySecretKey], err = certFile(inDNSKey)
-	}
-	// }
 
 	return err
 }

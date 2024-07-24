@@ -1199,7 +1199,7 @@ func (r *Reconciler) reconcileInstance(
 			&instance.Spec.Template.Spec)
 
 		addPGBackRestToInstancePodSpec(
-			ctx, cluster, instanceCertificates, &instance.Spec.Template.Spec)
+			ctx, cluster, instanceCertificates, &instance.Spec.Template.Spec, instance.Name)
 
 		err = patroni.InstancePod(
 			ctx, cluster, clusterConfigMap, clusterPodService, patroniLeaderService,
@@ -1375,13 +1375,14 @@ func generateInstanceStatefulSetIntent(_ context.Context,
 func addPGBackRestToInstancePodSpec(
 	ctx context.Context, cluster *v1beta1.PostgresCluster,
 	instanceCertificates *corev1.Secret, instancePod *corev1.PodSpec,
+	instanceName string,
 ) {
-	// if pgbackrest.DedicatedRepoHostEnabled(cluster) {
-	pgbackrest.AddServerToInstancePod(ctx, cluster, instancePod,
-		instanceCertificates.Name)
-	// }
+	if pgbackrest.DedicatedRepoHostEnabled(cluster) || pgbackrest.StandbyBackupEnabled(cluster) {
+		pgbackrest.AddServerToInstancePod(ctx, cluster, instancePod,
+			instanceCertificates.Name)
+	}
 
-	pgbackrest.AddConfigToInstancePod(cluster, instancePod)
+	pgbackrest.AddConfigToInstancePod(cluster, instancePod, instanceName)
 }
 
 // +kubebuilder:rbac:groups="",resources="configmaps",verbs={create,patch}

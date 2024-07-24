@@ -298,6 +298,10 @@ func (r *Reconciler) Reconcile(
 	if err == nil {
 		patroniLeaderService, err = r.reconcilePatroniLeaderLease(ctx, cluster)
 	}
+	fmt.Println("*************************")
+	fmt.Println("LEADER SERVICE")
+	fmt.Println(patroniLeaderService)
+	fmt.Println("*************************")
 	if err == nil {
 		primaryService, err = r.reconcileClusterPrimaryService(ctx, cluster, patroniLeaderService)
 	}
