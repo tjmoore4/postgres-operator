@@ -107,12 +107,16 @@ func AddRepoVolumesToPod(postgresCluster *v1beta1.PostgresCluster, template *cor
 // for an instance of cluster to pod. The database container and any pgBackRest
 // containers must already be in pod.
 func AddConfigToInstancePod(
-	cluster *v1beta1.PostgresCluster, pod *corev1.PodSpec,
+	cluster *v1beta1.PostgresCluster, pod *corev1.PodSpec, instanceName string,
 ) {
+	key := CMInstanceKey
+	if instanceName != "" {
+		key = instanceName + "_" + CMInstanceKey
+	}
 	configmap := corev1.VolumeProjection{ConfigMap: &corev1.ConfigMapProjection{}}
 	configmap.ConfigMap.Name = naming.PGBackRestConfig(cluster).Name
 	configmap.ConfigMap.Items = []corev1.KeyToPath{
-		{Key: CMInstanceKey, Path: CMInstanceKey},
+		{Key: key, Path: CMInstanceKey},
 		{Key: ConfigHashKey, Path: ConfigHashKey},
 	}
 
@@ -124,7 +128,7 @@ func AddConfigToInstancePod(
 	secret.Secret.Name = naming.PGBackRestSecret(cluster).Name
 	secret.Secret.Optional = initialize.Bool(true)
 
-	if DedicatedRepoHostEnabled(cluster) {
+	if DedicatedRepoHostEnabled(cluster) || StandbyBackupEnabled(cluster) {
 		configmap.ConfigMap.Items = append(
 			configmap.ConfigMap.Items, corev1.KeyToPath{
 				Key:  serverConfigMapKey,
@@ -424,7 +428,7 @@ func InstanceCertificates(ctx context.Context,
 ) error {
 	var err error
 
-	if DedicatedRepoHostEnabled(inCluster) {
+	if DedicatedRepoHostEnabled(inCluster) || StandbyBackupEnabled(inCluster) {
 		initialize.ByteMap(&outInstanceCertificates.Data)
 
 		if err == nil {
@@ -528,7 +532,7 @@ func Secret(ctx context.Context,
 	var err error
 
 	// Save the CA and generate a TLS client certificate for the entire cluster.
-	if inRepoHost != nil {
+	if inRepoHost != nil || StandbyBackupEnabled(inCluster) {
 		initialize.ByteMap(&outSecret.Data)
 
 		// The server verifies its "tls-server-auth" option contains the common
