@@ -105,14 +105,26 @@ func CreatePGBackRestConfigMapIntent(postgresCluster *v1beta1.PostgresCluster,
 	pgdataDir := postgres.DataDirectory(postgresCluster)
 	// Port will always be populated, since the API will set a default of 5432 if not provided
 	pgPort := *postgresCluster.Spec.Port
+
 	cm.Data[CMInstanceKey] = iniGeneratedWarning +
 		populatePGInstanceConfigurationMap(
 			serviceName, serviceNamespace, repoHostName, pgdataDir,
 			config.FetchKeyCommand(&postgresCluster.Spec),
 			strconv.Itoa(postgresCluster.Spec.PostgresVersion),
-			pgPort, postgresCluster.Spec.Backups.PGBackRest.Repos,
+			pgPort, "", instanceNames, postgresCluster.Spec.Backups.PGBackRest.Repos,
 			postgresCluster.Spec.Backups.PGBackRest.Global,
 		).String()
+
+	for _, instanceName := range instanceNames {
+		cm.Data[instanceName+"_"+CMInstanceKey] = iniGeneratedWarning +
+			populatePGInstanceConfigurationMap(
+				serviceName, serviceNamespace, repoHostName, pgdataDir,
+				config.FetchKeyCommand(&postgresCluster.Spec),
+				strconv.Itoa(postgresCluster.Spec.PostgresVersion),
+				pgPort, instanceName, instanceNames, postgresCluster.Spec.Backups.PGBackRest.Repos,
+				postgresCluster.Spec.Backups.PGBackRest.Global,
+			).String()
+	}
 
 	// As the cluster transitions from having a repository host to having none,
 	// PostgreSQL instances that have not rolled out expect to mount a server
@@ -120,10 +132,15 @@ func CreatePGBackRestConfigMapIntent(postgresCluster *v1beta1.PostgresCluster,
 	// Kubernetes propagates their contents to those pods.
 	cm.Data[serverConfigMapKey] = ""
 
-	if addDedicatedHost && repoHostName != "" {
+	// Besides when a repo host is configured, the cluster needs the server
+	// configuration when performing backups from a standby (i.e. instance replica).
+	if addDedicatedHost && repoHostName != "" || StandbyBackupEnabled(postgresCluster) {
 		cm.Data[serverConfigMapKey] = iniGeneratedWarning +
 			serverConfig(postgresCluster).String()
+	}
 
+	// The repo configuration is only needed when the repo host is enabled.
+	if addDedicatedHost && repoHostName != "" {
 		cm.Data[CMRepoKey] = iniGeneratedWarning +
 			populateRepoHostConfigurationMap(
 				serviceName, serviceNamespace,
@@ -279,8 +296,8 @@ mv "${pgdata}" "${pgdata}_bootstrap"`
 func populatePGInstanceConfigurationMap(
 	serviceName, serviceNamespace, repoHostName, pgdataDir,
 	fetchKeyCommand, postgresVersion string,
-	pgPort int32, repos []v1beta1.PGBackRestRepo,
-	globalConfig map[string]string,
+	pgPort int32, currentInstance string, pgHosts []string,
+	repos []v1beta1.PGBackRestRepo, globalConfig map[string]string,
 ) iniSectionSet {
 
 	// TODO(cbandy): pass a FQDN in already.
@@ -294,8 +311,15 @@ func populatePGInstanceConfigurationMap(
 	// pgBackRest will log to the pgData volume for commands run on the PostgreSQL instance
 	global.Set("log-path", naming.PGBackRestPGDataLogPath)
 
+	// keeps track of whether there is a volume based repo
+	volumeRepoHost := false
+
 	for _, repo := range repos {
-		global.Set(repo.Name+"-path", defaultRepo1Path+repo.Name)
+		// // here and below, this effectively removes the repo2 configuration from
+		// // the any configuration files that set a pg host value.
+		if currentInstance == "" {
+			global.Set(repo.Name+"-path", defaultRepo1Path+repo.Name)
+		}
 
 		// repo volumes do not contain configuration (unlike other repo types which has actual
 		// pgBackRest settings such as "bucket", "region", etc.), so only grab the name from the
@@ -308,7 +332,8 @@ func populatePGInstanceConfigurationMap(
 
 		// Only "volume" (i.e. PVC-based) repos should ever have a repo host configured.  This
 		// means cloud-based repos (S3, GCS or Azure) should not have a repo host configured.
-		if repoHostName != "" && repo.Volume != nil {
+		if repoHostName != "" && repo.Volume != nil && currentInstance == "" {
+			volumeRepoHost = true
 			global.Set(repo.Name+"-host", repoHostFQDN)
 			global.Set(repo.Name+"-host-type", "tls")
 			global.Set(repo.Name+"-host-ca-file", certAuthorityAbsolutePath)
@@ -332,6 +357,31 @@ func populatePGInstanceConfigurationMap(
 		stanza.Set("archive-header-check", "n")
 		stanza.Set("page-header-check", "n")
 		stanza.Set("pg-version-force", postgresVersion)
+	}
+
+	// set the configs for all PG hosts if there was not a volume based repo host
+	if !volumeRepoHost && currentInstance != "" { //&& repoHostName == "" {
+		i := 2
+		for _, pgHost := range pgHosts {
+			if pgHost == currentInstance {
+				continue
+			}
+			// TODO(cbandy): pass a FQDN in already.
+			pgHostFQDN := pgHost + "-0." +
+				serviceName + "." + serviceNamespace + ".svc." +
+				naming.KubernetesClusterDomain(context.Background())
+
+			stanza.Set(fmt.Sprintf("pg%d-host", i), pgHostFQDN)
+			stanza.Set(fmt.Sprintf("pg%d-host-type", i), "tls")
+			stanza.Set(fmt.Sprintf("pg%d-host-ca-file", i), "/etc/pgbackrest/conf.d/~postgres-operator/tls-ca.crt")
+			stanza.Set(fmt.Sprintf("pg%d-host-cert-file", i), "/etc/pgbackrest/conf.d/~postgres-operator/client-tls.crt")
+			stanza.Set(fmt.Sprintf("pg%d-host-key-file", i), "/etc/pgbackrest/conf.d/~postgres-operator/client-tls.key")
+
+			stanza.Set(fmt.Sprintf("pg%d-path", i), pgdataDir)
+			stanza.Set(fmt.Sprintf("pg%d-port", i), fmt.Sprint(pgPort))
+			stanza.Set(fmt.Sprintf("pg%d-socket-path", i), postgres.SocketDirectory)
+			i++
+		}
 	}
 
 	return iniSectionSet{

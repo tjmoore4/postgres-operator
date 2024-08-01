@@ -41,6 +41,17 @@ func DedicatedRepoHostEnabled(postgresCluster *v1beta1.PostgresCluster) bool {
 	return false
 }
 
+// StandbyBackupEnabled determines whether the pgBackRest 'backup-standby' setting is
+// enabled according to the provided PostgresCluster
+func StandbyBackupEnabled(postgresCluster *v1beta1.PostgresCluster) bool {
+	value := postgresCluster.Spec.Backups.PGBackRest.Global["backup-standby"]
+	if value == "y" {
+		return true
+	}
+
+	return false
+}
+
 // CalculateConfigHashes calculates hashes for any external pgBackRest repository configuration
 // present in the PostgresCluster spec (e.g. configuration for Azure, GCR and/or S3 repositories).
 // Additionally it returns a hash of the hashes for each external repository.

@@ -692,14 +692,20 @@ func (r *Reconciler) generateRepoVolumeIntent(postgresCluster *v1beta1.PostgresC
 }
 
 // generateBackupJobSpecIntent generates a JobSpec for a pgBackRest backup job
-func generateBackupJobSpecIntent(postgresCluster *v1beta1.PostgresCluster,
-	repo v1beta1.PGBackRestRepo, serviceAccountName string,
-	labels, annotations map[string]string, opts ...string) (*batchv1.JobSpec, error) {
+func (r *Reconciler) generateBackupJobSpecIntent(ctx context.Context,
+	postgresCluster *v1beta1.PostgresCluster, repo v1beta1.PGBackRestRepo,
+	serviceAccountName string, labels, annotations map[string]string,
+	opts ...string) (*batchv1.JobSpec, error) {
 
-	selector, containerName, err := getPGBackRestExecSelector(postgresCluster, repo)
+	selector, containerName, err := getPGBackRestExecSelector(postgresCluster)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
+
+	fmt.Println("***************************************")
+	fmt.Println(containerName)
+	fmt.Println(selector)
+	fmt.Println("***************************************")
 
 	repoIndex := regexRepoIndex.FindString(repo.Name)
 	cmdOpts := []string{
@@ -774,7 +780,23 @@ func generateBackupJobSpecIntent(postgresCluster *v1beta1.PostgresCluster,
 	if containerName == naming.PGBackRestRepoContainerName {
 		pgbackrest.AddConfigToRepoPod(postgresCluster, &jobSpec.Template.Spec)
 	} else {
-		pgbackrest.AddConfigToInstancePod(postgresCluster, &jobSpec.Template.Spec)
+
+		fmt.Println("*********************************************************************************************************")
+		fmt.Println("IN GENERATE BACKUP JOB INTENET, ADDING TO INSTANCE POD")
+		leaderEP := corev1.Endpoints{}
+		if err := r.Client.Get(ctx, naming.AsObjectKey(naming.PatroniLeaderEndpoints(postgresCluster)),
+			&leaderEP); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return nil, errors.WithStack(err)
+			}
+		}
+		fmt.Println(strings.TrimRight(leaderEP.ObjectMeta.Annotations["leader"], "-0"))
+		fmt.Println("*********************************************************************************************************")
+
+		// The last value needs to reference the primary so the correct configuration can be mounted to
+		// the backup job pod. If the wrong configuration is referenced, pgBackRest errors out with a
+		// configuration error ("hash <value> does not match local hash").
+		pgbackrest.AddConfigToInstancePod(postgresCluster, &jobSpec.Template.Spec, strings.TrimRight(leaderEP.ObjectMeta.Annotations["leader"], "-0"))
 	}
 
 	return jobSpec, nil
@@ -2092,6 +2114,7 @@ func (r *Reconciler) reconcileDedicatedRepoHost(ctx context.Context,
 				&repoResources.hosts[j].CreationTimestamp)
 		})
 	}
+	// NEED TO LOOK INTO THIS
 	repoHostName := repoResources.hosts[0].Name
 	repoHost, err := r.applyRepoHostIntent(ctx, postgresCluster, repoHostName, repoResources,
 		observedInstances)
@@ -2306,7 +2329,7 @@ func (r *Reconciler) reconcileManualBackup(ctx context.Context,
 	backupJob.ObjectMeta.Labels = labels
 	backupJob.ObjectMeta.Annotations = annotations
 
-	spec, err := generateBackupJobSpecIntent(postgresCluster, repo,
+	spec, err := r.generateBackupJobSpecIntent(ctx, postgresCluster, repo,
 		serviceAccount.GetName(), labels, annotations, backupOpts...)
 	if err != nil {
 		return errors.WithStack(err)
@@ -2400,7 +2423,7 @@ func (r *Reconciler) reconcileReplicaCreateBackup(ctx context.Context,
 
 	// get pod name and container name as needed to exec into the proper pod and create
 	// the pgBackRest backup
-	_, containerName, err := getPGBackRestExecSelector(postgresCluster, replicaCreateRepo)
+	_, containerName, err := getPGBackRestExecSelector(postgresCluster)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -2423,6 +2446,9 @@ func (r *Reconciler) reconcileReplicaCreateBackup(ctx context.Context,
 
 		// determine if the replica creation repo has changed
 		replicaCreateRepoChanged := true
+		fmt.Println("*********************")
+		fmt.Printf("CURRENT REPLICA REPO: %v\n", replicaCreateRepo.Name)
+		fmt.Printf("LABEL REPLICA REPO: %v\n", job.GetLabels()[naming.LabelPGBackRestRepo])
 		if replicaCreateRepo.Name == job.GetLabels()[naming.LabelPGBackRestRepo] {
 			replicaCreateRepoChanged = false
 		}
@@ -2444,6 +2470,12 @@ func (r *Reconciler) reconcileReplicaCreateBackup(ctx context.Context,
 				client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil {
 				return errors.WithStack(err)
 			}
+			fmt.Println("DELETED BACKUP JOB EARLY")
+			fmt.Printf("FAILED: %v\n", failed)
+			fmt.Printf("CREATE REPO CHANGED: %v\n", replicaCreateRepoChanged)
+			fmt.Printf("CONTAINER NAME CHANGED: %v\n", job.GetAnnotations()[naming.PGBackRestCurrentConfig] != containerName)
+			fmt.Printf("CONFIG HASH CHANGED: %v\n", job.GetAnnotations()[naming.PGBackRestConfigHash] != configHash)
+			fmt.Println("*********************")
 			return nil
 		}
 
@@ -2482,7 +2514,7 @@ func (r *Reconciler) reconcileReplicaCreateBackup(ctx context.Context,
 	backupJob.ObjectMeta.Labels = labels
 	backupJob.ObjectMeta.Annotations = annotations
 
-	spec, err := generateBackupJobSpecIntent(postgresCluster, replicaCreateRepo,
+	spec, err := r.generateBackupJobSpecIntent(ctx, postgresCluster, replicaCreateRepo,
 		serviceAccount.GetName(), labels, annotations)
 	if err != nil {
 		return errors.WithStack(err)
@@ -2495,6 +2527,9 @@ func (r *Reconciler) reconcileReplicaCreateBackup(ctx context.Context,
 		r.Client.Scheme()); err != nil {
 		return errors.WithStack(err)
 	}
+
+	fmt.Println("**************************")
+	fmt.Println(backupJob.Name)
 
 	if err := r.apply(ctx, backupJob); err != nil {
 		return errors.WithStack(err)
@@ -2540,6 +2575,8 @@ func (r *Reconciler) reconcileRepos(ctx context.Context,
 		getRepoVolumeStatus(postgresCluster.Status.PGBackRest.Repos, repoVols, extConfigHashes,
 			replicaCreateRepo.Name)
 
+	fmt.Println("REPLICA CREATE REPO")
+	fmt.Println(replicaCreateRepo)
 	return replicaCreateRepo, utilerrors.NewAggregate(errors)
 }
 
@@ -2631,11 +2668,21 @@ func (r *Reconciler) reconcileStanzaCreate(ctx context.Context,
 		return false, nil
 	}
 
+	execContainer := naming.ContainerDatabase
+	for _, repo := range postgresCluster.Spec.Backups.PGBackRest.Repos {
+		if repo.Volume != nil {
+			execContainer = naming.PGBackRestRepoContainerName
+			// UPDATE THIS IF IT WORKS
+			writableInstanceName = postgresCluster.GetName() + "-repo-host-0"
+		}
+	}
+
 	// create a pgBackRest executor and attempt stanza creation
 	exec := func(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer,
 		command ...string) error {
 		return r.PodExec(ctx, postgresCluster.GetNamespace(), writableInstanceName,
-			naming.ContainerDatabase, stdin, stdout, stderr, command...)
+			// BEFORE THIS CHANGE, THE STANZA IS ALWAYS CREATED IN THE PRIMARY
+			execContainer, stdin, stdout, stderr, command...)
 	}
 
 	// Always attempt to create pgBackRest stanza first
@@ -2671,17 +2718,20 @@ func (r *Reconciler) reconcileStanzaCreate(ctx context.Context,
 // getPGBackRestExecSelector returns a selector and container name that allows the proper
 // Pod (along with a specific container within it) to be found within the Kubernetes
 // cluster as needed to exec into the container and run a pgBackRest command.
-func getPGBackRestExecSelector(postgresCluster *v1beta1.PostgresCluster,
-	repo v1beta1.PGBackRestRepo) (labels.Selector, string, error) {
+func getPGBackRestExecSelector(postgresCluster *v1beta1.PostgresCluster) (labels.Selector, string, error) {
 
 	var err error
 	var podSelector labels.Selector
 	var containerName string
 
-	if repo.Volume != nil {
-		podSelector = naming.PGBackRestDedicatedSelector(postgresCluster.GetName())
-		containerName = naming.PGBackRestRepoContainerName
-	} else {
+	for _, repo := range postgresCluster.Spec.Backups.PGBackRest.Repos {
+		if repo.Volume != nil {
+			podSelector = naming.PGBackRestDedicatedSelector(postgresCluster.GetName())
+			containerName = naming.PGBackRestRepoContainerName
+		}
+	}
+
+	if containerName == "" {
 		podSelector, err = naming.AsSelector(naming.ClusterPrimary(postgresCluster.GetName()))
 		containerName = naming.ContainerDatabase
 	}
@@ -2934,7 +2984,7 @@ func (r *Reconciler) reconcilePGBackRestCronJob(
 	// set backup type (i.e. "full", "diff", "incr")
 	backupOpts := []string{"--type=" + backupType}
 
-	jobSpec, err := generateBackupJobSpecIntent(cluster, repo,
+	jobSpec, err := r.generateBackupJobSpecIntent(ctx, cluster, repo,
 		serviceAccount.GetName(), labels, annotations, backupOpts...)
 	if err != nil {
 		return errors.WithStack(err)
