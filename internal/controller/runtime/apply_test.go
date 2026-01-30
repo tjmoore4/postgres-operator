@@ -54,7 +54,7 @@ func TestServerSideApply(t *testing.T) {
 
 		// Create the object.
 		before := constructor()
-		assert.NilError(t, cc.Patch(ctx, before, client.Apply))
+		assert.NilError(t, cc.Patch(ctx, before, client.Apply)) //nolint:staticcheck // Testing deprecated API behavior
 		assert.Assert(t, before.GetResourceVersion() != "")
 
 		// Allow the Kubernetes API clock to advance.
@@ -62,7 +62,7 @@ func TestServerSideApply(t *testing.T) {
 
 		// client.Apply changes the ResourceVersion inadvertently.
 		after := constructor()
-		assert.NilError(t, cc.Patch(ctx, after, client.Apply))
+		assert.NilError(t, cc.Patch(ctx, after, client.Apply)) //nolint:staticcheck // Testing deprecated API behavior
 		assert.Assert(t, after.GetResourceVersion() != "")
 
 		switch {
@@ -114,7 +114,7 @@ func TestServerSideApply(t *testing.T) {
 		assert.NilError(t,
 			controllerutil.SetControllerReference(controller2, applied, cc.Scheme()))
 
-		err1 := cc.Patch(ctx, applied, client.Apply, client.ForceOwnership)
+		err1 := cc.Patch(ctx, applied, client.Apply, client.ForceOwnership) //nolint:staticcheck // Testing deprecated API behavior
 
 		// Patch not accepted; the ownerReferences field is invalid.
 		assert.Assert(t, apierrors.IsInvalid(err1), "got %#v", err1)
@@ -168,7 +168,7 @@ func TestServerSideApply(t *testing.T) {
 				// Create the Service.
 				before := intent.DeepCopy()
 				assert.NilError(t,
-					cc.Patch(ctx, before, client.Apply, client.ForceOwnership))
+					cc.Patch(ctx, before, client.Apply, client.ForceOwnership)) //nolint:staticcheck // Testing deprecated API behavior
 
 				// Something external mucks it up.
 				assert.NilError(t,
@@ -179,7 +179,7 @@ func TestServerSideApply(t *testing.T) {
 				// client.Apply cannot correct it.
 				after := intent.DeepCopy()
 				assert.NilError(t,
-					cc.Patch(ctx, after, client.Apply, client.ForceOwnership))
+					cc.Patch(ctx, after, client.Apply, client.ForceOwnership)) //nolint:staticcheck // Testing deprecated API behavior
 
 				// Perhaps one of:
 				// - https://issue.k8s.io/117447
