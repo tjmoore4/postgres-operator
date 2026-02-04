@@ -14,6 +14,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crunchydata/postgres-operator/internal/initialize"
@@ -160,7 +161,14 @@ func (r *Reconciler) reconcilePatroniDistributedConfiguration(
 	dcsService.Spec.Selector = nil
 
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, dcsService))
+		applyConfig, err := corev1ac.ExtractService(dcsService, naming.FieldManager)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return errors.WithStack(err)
+		}
 	}
 
 	// TODO(cbandy): DCS "failover_path"; `failover` and `switchover` create "{scope}-failover" endpoints.
@@ -300,7 +308,22 @@ func (r *Reconciler) reconcilePatroniLeaderLease(
 	// - https://releases.k8s.io/v1.20.0/pkg/controller/endpoint/endpoints_controller.go#L580
 	service, err := r.generatePatroniLeaderLeaseService(cluster)
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, service))
+		applyConfig, err := corev1ac.ExtractService(service, naming.FieldManager)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		applyConfig.Spec.Ports = []corev1ac.ServicePortApplyConfiguration{
+			{
+				Name:       &service.Spec.Ports[0].Name,
+				Port:       &service.Spec.Ports[0].Port,
+				Protocol:   &service.Spec.Ports[0].Protocol,
+				TargetPort: &service.Spec.Ports[0].TargetPort,
+			},
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 	}
 	return service, err
 }
@@ -416,7 +439,14 @@ func (r *Reconciler) reconcileReplicationSecret(
 		err = errors.WithStack(err)
 	}
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, intent))
+		applyConfig, err := corev1ac.ExtractSecret(intent, naming.FieldManager)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 	}
 	return intent, err
 }

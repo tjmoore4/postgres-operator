@@ -17,12 +17,14 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crunchydata/postgres-operator/internal/naming"
 	"github.com/crunchydata/postgres-operator/internal/pki"
 	"github.com/crunchydata/postgres-operator/internal/testing/require"
 	"github.com/crunchydata/postgres-operator/pkg/apis/postgres-operator.crunchydata.com/v1beta1"
+	"github.com/pkg/errors"
 )
 
 // TestReconcileCerts tests the proper reconciliation of the root ca certificate
@@ -144,7 +146,10 @@ func TestReconcileCerts(t *testing.T) {
 			emptyRootSecret.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Secret"))
 			emptyRootSecret.Namespace, emptyRootSecret.Name = namespace, naming.RootCertSecret
 			emptyRootSecret.Data = make(map[string][]byte)
-			assert.NilError(t, r.apply(ctx, emptyRootSecret))
+			applyConfig, err := corev1ac.ExtractSecret(emptyRootSecret, naming.FieldManager)
+			assert.NilError(t, err)
+			err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+			assert.NilError(t, err)
 
 			// reconcile the root cert secret, creating a new root cert
 			returnedRoot, err := r.reconcileRootCertificate(ctx, cluster1)
@@ -204,7 +209,10 @@ func TestReconcileCerts(t *testing.T) {
 			emptyRootSecret.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Secret"))
 			emptyRootSecret.Namespace, emptyRootSecret.Name = namespace, naming.RootCertSecret
 			emptyRootSecret.Data = make(map[string][]byte)
-			assert.NilError(t, r.apply(ctx, emptyRootSecret))
+			applyConfig, err := corev1ac.ExtractSecret(emptyRootSecret, naming.FieldManager)
+			assert.NilError(t, err)
+			err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+			assert.NilError(t, err)
 
 			// reconcile the root cert secret
 			newRootCert, err := r.reconcileRootCertificate(ctx, cluster1)
@@ -329,7 +337,10 @@ func TestReconcileCerts(t *testing.T) {
 			emptyRootSecret.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Secret"))
 			emptyRootSecret.Namespace, emptyRootSecret.Name = namespace, naming.RootCertSecret
 			emptyRootSecret.Data = make(map[string][]byte)
-			assert.NilError(t, r.apply(ctx, emptyRootSecret))
+			applyConfig, err := corev1ac.ExtractSecret(emptyRootSecret, naming.FieldManager)
+			assert.NilError(t, err)
+			err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+			assert.NilError(t, err)
 
 			// reconcile the root cert secret, creating a new root cert
 			returnedRoot, err := r.reconcileRootCertificate(ctx, cluster1)

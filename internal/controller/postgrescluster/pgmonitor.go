@@ -14,6 +14,7 @@ import (
 
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
+	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crunchydata/postgres-operator/internal/collector"
@@ -245,7 +246,14 @@ func (r *Reconciler) reconcileMonitoringSecret(
 
 	err = errors.WithStack(r.setControllerReference(cluster, intent))
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, intent))
+		applyConfig, err := corev1ac.ExtractSecret(intent, naming.FieldManager)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 	}
 	if err == nil {
 		return intent, nil
@@ -455,7 +463,14 @@ tls_server_config:
 
 	err = errors.WithStack(r.setControllerReference(cluster, intent))
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, intent))
+		applyConfig, err := corev1ac.ExtractConfigMap(intent, naming.FieldManager)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 	}
 	if err == nil {
 		return intent, nil
@@ -502,7 +517,14 @@ func (r *Reconciler) reconcileExporterQueriesConfig(ctx context.Context,
 
 	err = errors.WithStack(r.setControllerReference(cluster, intent))
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, intent))
+		applyConfig, err := corev1ac.ExtractConfigMap(intent, naming.FieldManager)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 	}
 	if err == nil {
 		return intent, nil

@@ -10,6 +10,7 @@ import (
 	"github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crunchydata/postgres-operator/internal/naming"
@@ -86,7 +87,14 @@ func (r *Reconciler) reconcileRootCertificate(
 		err = errors.WithStack(err)
 	}
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, intent))
+		applyConfig, err := corev1ac.ExtractSecret(intent, naming.FieldManager)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 	}
 
 	return root, err
@@ -172,7 +180,14 @@ func (r *Reconciler) reconcileClusterCertificate(
 	// initially created and a custom secret is later used, the generated
 	// secret is currently left in place.
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, intent))
+		applyConfig, err := corev1ac.ExtractSecret(intent, naming.FieldManager)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 	}
 
 	return clusterCertSecretProjection(intent), err

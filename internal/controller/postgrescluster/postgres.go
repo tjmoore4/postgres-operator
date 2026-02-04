@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crunchydata/postgres-operator/internal/collector"
@@ -623,7 +624,14 @@ func (r *Reconciler) reconcilePostgresUserSecrets(
 			userSecrets[userName], err = r.generatePostgresUserSecret(cluster, user, secret)
 		}
 		if err == nil {
-			err = errors.WithStack(r.apply(ctx, userSecrets[userName]))
+			applyConfig, err := corev1ac.ExtractSecret(userSecrets[userName], userSecrets[userName].Name)
+			if err != nil {
+				return nil, nil, errors.WithStack(err)
+			}
+			err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+			if err != nil {
+				return nil, nil, errors.WithStack(err)
+			}
 		}
 	}
 
@@ -757,31 +765,32 @@ func (r *Reconciler) reconcilePostgresDataVolume(
 
 	pvc.Spec = instanceSpec.DataVolumeClaimSpec.AsPersistentVolumeClaimSpec()
 
-	// If a source cluster was provided and VolumeSnapshots are turned on in the source cluster and
-	// there is a VolumeSnapshot available for the source cluster that is ReadyToUse, use it as the
-	// source for the PVC. If there is an error when retrieving VolumeSnapshots, or no ReadyToUse
-	// snapshots were found, create a warning event, but continue creating PVC in the usual fashion.
-	if sourceCluster != nil && sourceCluster.Spec.Backups.Snapshots != nil && feature.Enabled(ctx, feature.VolumeSnapshots) {
-		snapshots, err := r.getSnapshotsForCluster(ctx, sourceCluster)
-		if err == nil {
-			snapshot := getLatestReadySnapshot(snapshots)
-			if snapshot != nil {
-				r.Recorder.Eventf(cluster, corev1.EventTypeNormal, "BootstrappingWithSnapshot",
-					"Snapshot found for %v; bootstrapping cluster with snapshot.", sourceCluster.Name)
-				pvc.Spec.DataSource = &corev1.TypedLocalObjectReference{
-					APIGroup: initialize.String("snapshot.storage.k8s.io"),
-					Kind:     snapshot.Kind,
-					Name:     snapshot.Name,
-				}
-			} else {
-				r.Recorder.Eventf(cluster, corev1.EventTypeWarning, "SnapshotNotFound",
-					"No ReadyToUse snapshots were found for %v; proceeding with typical restore process.", sourceCluster.Name)
-			}
-		} else {
-			r.Recorder.Eventf(cluster, corev1.EventTypeWarning, "SnapshotNotFound",
-				"Could not get snapshots for %v, proceeding with typical restore process.", sourceCluster.Name)
-		}
-	}
+	// COMMENT THIS OUT FOR POC
+	// // If a source cluster was provided and VolumeSnapshots are turned on in the source cluster and
+	// // there is a VolumeSnapshot available for the source cluster that is ReadyToUse, use it as the
+	// // source for the PVC. If there is an error when retrieving VolumeSnapshots, or no ReadyToUse
+	// // snapshots were found, create a warning event, but continue creating PVC in the usual fashion.
+	// if sourceCluster != nil && sourceCluster.Spec.Backups.Snapshots != nil && feature.Enabled(ctx, feature.VolumeSnapshots) {
+	// 	snapshots, err := r.getSnapshotsForCluster(ctx, sourceCluster)
+	// 	if err == nil {
+	// 		snapshot := getLatestReadySnapshot(snapshots)
+	// 		if snapshot != nil {
+	// 			r.Recorder.Eventf(cluster, corev1.EventTypeNormal, "BootstrappingWithSnapshot",
+	// 				"Snapshot found for %v; bootstrapping cluster with snapshot.", sourceCluster.Name)
+	// 			pvc.Spec.DataSource = &corev1.TypedLocalObjectReference{
+	// 				APIGroup: initialize.String("snapshot.storage.k8s.io"),
+	// 				Kind:     snapshot.Kind,
+	// 				Name:     snapshot.Name,
+	// 			}
+	// 		} else {
+	// 			r.Recorder.Eventf(cluster, corev1.EventTypeWarning, "SnapshotNotFound",
+	// 				"No ReadyToUse snapshots were found for %v; proceeding with typical restore process.", sourceCluster.Name)
+	// 		}
+	// 	} else {
+	// 		r.Recorder.Eventf(cluster, corev1.EventTypeWarning, "SnapshotNotFound",
+	// 			"Could not get snapshots for %v, proceeding with typical restore process.", sourceCluster.Name)
+	// 	}
+	// }
 
 	r.setVolumeSize(ctx, cluster, &pvc.Spec, "pgData", instanceSpec.Name)
 
@@ -790,8 +799,14 @@ func (r *Reconciler) reconcilePostgresDataVolume(
 	pvc.Spec.Resources.Limits = nil
 
 	if err == nil {
-		err = r.handlePersistentVolumeClaimError(cluster,
-			errors.WithStack(r.apply(ctx, pvc)))
+		applyConfig, err := corev1ac.ExtractPersistentVolumeClaim(pvc, naming.FieldManager)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		err = r.handlePersistentVolumeClaimError(cluster, errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership)))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 	}
 
 	return pvc, err
@@ -852,8 +867,14 @@ func (r *Reconciler) reconcileTablespaceVolumes(
 		pvc.Spec = vol.DataVolumeClaimSpec.AsPersistentVolumeClaimSpec()
 
 		if err == nil {
-			err = r.handlePersistentVolumeClaimError(cluster,
-				errors.WithStack(r.apply(ctx, pvc)))
+			applyConfig, err := corev1ac.ExtractPersistentVolumeClaim(pvc, naming.FieldManager)
+			if err != nil {
+				return nil, errors.WithStack(err)
+			}
+			err = r.handlePersistentVolumeClaimError(cluster, errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership)))
+			if err != nil {
+				return nil, errors.WithStack(err)
+			}
 		}
 
 		if err != nil {
@@ -965,8 +986,15 @@ func (r *Reconciler) reconcilePostgresWALVolume(
 	pvc.Spec.Resources.Limits = nil
 
 	if err == nil {
+		applyConfig, err := corev1ac.ExtractPersistentVolumeClaim(pvc, naming.FieldManager)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 		err = r.handlePersistentVolumeClaimError(cluster,
-			errors.WithStack(r.apply(ctx, pvc)))
+			errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership)))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 	}
 
 	return pvc, err

@@ -238,6 +238,10 @@ func main() {
 	manager := need(runtime.NewManager(config, options))
 	must(manager.Add(k8s))
 
+	fmt.Println("STARTING MANAGER")
+	fmt.Println(manager)
+	fmt.Println("ENDING MANAGER")
+
 	// add all PostgreSQL Operator controllers to the runtime manager
 	must(pgupgrade.ManagedReconciler(manager))
 	must(postgrescluster.ManagedReconciler(manager))

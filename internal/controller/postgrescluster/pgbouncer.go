@@ -16,6 +16,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
+	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
+	policyv1ac "k8s.io/client-go/applyconfigurations/policy/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crunchydata/postgres-operator/internal/collector"
@@ -134,7 +137,14 @@ func (r *Reconciler) reconcilePGBouncerConfigMap(
 			[]collector.LogrotateConfig{logrotateConfig})
 	}
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, configmap))
+		applyConfig, err := corev1ac.ExtractConfigMap(configmap, naming.FieldManager)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return configmap, err
@@ -268,7 +278,14 @@ func (r *Reconciler) reconcilePGBouncerSecret(
 		err = pgbouncer.Secret(ctx, cluster, root, existing, service, intent)
 	}
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, intent))
+		applyConfig, err := corev1ac.ExtractSecret(intent, naming.FieldManager)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return intent, err
@@ -382,7 +399,14 @@ func (r *Reconciler) reconcilePGBouncerService(
 	}
 
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, service))
+		applyConfig, err := corev1ac.ExtractService(service, naming.FieldManager)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return nil, err
+		}
 	}
 	return service, err
 }
@@ -573,7 +597,14 @@ func (r *Reconciler) reconcilePGBouncerDeployment(
 	}
 
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, deploy))
+		applyConfig, err := appsv1ac.ExtractDeployment(deploy, naming.FieldManager)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return err
+		}
 	}
 	return err
 }
@@ -633,7 +664,14 @@ func (r *Reconciler) reconcilePGBouncerPodDisruptionBudget(
 	}
 
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, pdb))
+		applyConfig, err := policyv1ac.ExtractPodDisruptionBudget(pdb, naming.FieldManager)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return err
+		}
 	}
 	return err
 }

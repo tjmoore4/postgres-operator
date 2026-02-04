@@ -26,6 +26,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
+	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
+	batchv1ac "k8s.io/client-go/applyconfigurations/batch/v1"
+	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
+	rbacv1ac "k8s.io/client-go/applyconfigurations/rbac/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -157,7 +161,12 @@ func (r *Reconciler) applyRepoHostIntent(ctx context.Context, postgresCluster *v
 		}
 	}
 
-	if err := r.apply(ctx, repo); err != nil {
+	applyConfig, err := appsv1ac.ExtractStatefulSet(repo, repo.Name)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+	if err != nil {
 		return nil, err
 	}
 
@@ -179,9 +188,13 @@ func (r *Reconciler) applyRepoVolumeIntent(ctx context.Context,
 		return nil, errors.WithStack(err)
 	}
 
-	if err := r.apply(ctx, repo); err != nil {
-		return nil, r.handlePersistentVolumeClaimError(postgresCluster,
-			errors.WithStack(err))
+	applyConfig, err := corev1ac.ExtractPersistentVolumeClaim(repo, naming.FieldManager)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+	if err != nil {
+		return nil, err
 	}
 
 	return repo, nil
@@ -1327,7 +1340,15 @@ func (r *Reconciler) reconcileRestoreJob(ctx context.Context,
 
 	AddTMPEmptyDir(&restoreJob.Spec.Template)
 
-	return errors.WithStack(r.apply(ctx, restoreJob))
+	applyConfig, err := batchv1ac.ExtractJob(restoreJob, naming.FieldManager)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (r *Reconciler) generateRestoreJobIntent(cluster *v1beta1.PostgresCluster,
@@ -1939,12 +1960,26 @@ func (r *Reconciler) copyRestoreConfiguration(ctx context.Context,
 		)
 	}
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, config))
+		applyConfig, err := corev1ac.ExtractConfigMap(config, naming.FieldManager)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return err
+		}
 	}
 
 	// Write the Secret when there is something we want to keep in it.
 	if err == nil && len(secret.Data) != 0 {
-		err = errors.WithStack(r.apply(ctx, secret))
+		applyConfig, err := corev1ac.ExtractSecret(secret, naming.FieldManager)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return err
+		}
 	}
 
 	// copy any needed projected Secrets or ConfigMaps
@@ -2015,7 +2050,12 @@ func (r *Reconciler) copyConfigurationResources(ctx context.Context, cluster,
 				return err
 			}
 
-			if err := errors.WithStack(r.apply(ctx, secretCopy)); err != nil {
+			applyConfig, err := corev1ac.ExtractSecret(secretCopy, naming.FieldManager)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+			if err != nil {
 				return err
 			}
 			// update the copy of the source PostgresCluster to add the new Secret
@@ -2068,7 +2108,12 @@ func (r *Reconciler) copyConfigurationResources(ctx context.Context, cluster,
 			if err := r.setControllerReference(cluster, configMapCopy); err != nil {
 				return err
 			}
-			if err := errors.WithStack(r.apply(ctx, configMapCopy)); err != nil {
+			applyConfig, err := corev1ac.ExtractConfigMap(configMapCopy, naming.FieldManager)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+			if err != nil {
 				return err
 			}
 			// update the copy of the source PostgresCluster to add the new ConfigMap
@@ -2096,8 +2141,14 @@ func (r *Reconciler) reconcilePGBackRestConfig(ctx context.Context,
 	if err := r.setControllerReference(postgresCluster, backrestConfig); err != nil {
 		return err
 	}
-	if err := r.apply(ctx, backrestConfig); err != nil {
+
+	applyConfig, err := corev1ac.ExtractConfigMap(backrestConfig, naming.FieldManager)
+	if err != nil {
 		return errors.WithStack(err)
+	}
+	err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -2143,7 +2194,14 @@ func (r *Reconciler) reconcilePGBackRestSecret(ctx context.Context,
 
 	// Write the Secret when there is something we want to keep in it.
 	if err == nil && len(intent.Data) != 0 {
-		err = errors.WithStack(r.apply(ctx, intent))
+		applyConfig, err := corev1ac.ExtractSecret(intent, naming.FieldManager)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return err
+		}
 	}
 	return err
 }
@@ -2203,14 +2261,30 @@ func (r *Reconciler) reconcilePGBackRestRBAC(ctx context.Context,
 	}}
 	role.Rules = pgbackrest.Permissions(postgresCluster)
 
-	if err := r.apply(ctx, sa); err != nil {
+	applyConfig, err := corev1ac.ExtractServiceAccount(sa, naming.FieldManager)
+	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	if err := r.apply(ctx, role); err != nil {
+	err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+	if err != nil {
+		return nil, err
+	}
+
+	applyConfigRole, err := rbacv1ac.ExtractRole(role, naming.FieldManager)
+	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	if err := r.apply(ctx, binding); err != nil {
+	err = errors.WithStack(r.Writer.Apply(ctx, applyConfigRole, client.ForceOwnership))
+	if err != nil {
+		return nil, err
+	}
+	applyConfigRoleBinding, err := rbacv1ac.ExtractRoleBinding(binding, naming.FieldManager)
+	if err != nil {
 		return nil, errors.WithStack(err)
+	}
+	err = errors.WithStack(r.Writer.Apply(ctx, applyConfigRoleBinding, client.ForceOwnership))
+	if err != nil {
+		return nil, err
 	}
 
 	return sa, nil
@@ -2268,14 +2342,29 @@ func (r *Reconciler) reconcileRepoHostRBAC(ctx context.Context,
 	}}
 	role.Rules = pgbackrest.RepoHostPermissions(postgresCluster)
 
-	if err := r.apply(ctx, sa); err != nil {
+	applyConfig, err := corev1ac.ExtractServiceAccount(sa, naming.FieldManager)
+	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	if err := r.apply(ctx, role); err != nil {
+	err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+	if err != nil {
+		return nil, err
+	}
+	applyConfigRole, err := rbacv1ac.ExtractRole(role, naming.FieldManager)
+	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	if err := r.apply(ctx, binding); err != nil {
+	err = errors.WithStack(r.Writer.Apply(ctx, applyConfigRole, client.ForceOwnership))
+	if err != nil {
+		return nil, err
+	}
+	applyConfigRoleBinding, err := rbacv1ac.ExtractRoleBinding(binding, naming.FieldManager)
+	if err != nil {
 		return nil, errors.WithStack(err)
+	}
+	err = errors.WithStack(r.Writer.Apply(ctx, applyConfigRoleBinding, client.ForceOwnership))
+	if err != nil {
+		return nil, err
 	}
 
 	return sa, nil
@@ -2552,7 +2641,12 @@ func (r *Reconciler) reconcileManualBackup(ctx context.Context,
 	}
 
 	// server-side apply the backup Job intent
-	if err := r.apply(ctx, backupJob); err != nil {
+	applyConfig, err := batchv1ac.ExtractJob(backupJob, naming.FieldManager)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+	if err != nil {
 		return errors.WithStack(err)
 	}
 
@@ -2728,7 +2822,12 @@ func (r *Reconciler) reconcileReplicaCreateBackup(ctx context.Context,
 		return errors.WithStack(err)
 	}
 
-	if err := r.apply(ctx, backupJob); err != nil {
+	applyConfig, err := batchv1ac.ExtractJob(backupJob, naming.FieldManager)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+	if err != nil {
 		return errors.WithStack(err)
 	}
 
@@ -3245,7 +3344,14 @@ func (r *Reconciler) reconcilePGBackRestCronJob(
 	err := errors.WithStack(r.setControllerReference(cluster, pgBackRestCronJob))
 
 	if err == nil {
-		err = r.apply(ctx, pgBackRestCronJob)
+		applyConfig, err := batchv1ac.ExtractCronJob(pgBackRestCronJob, naming.FieldManager)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return err
+		}
 	}
 	if err != nil {
 		// record and log any errors resulting from trying to create the pgBackRest backup CronJob

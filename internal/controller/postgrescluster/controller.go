@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	apiruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -54,6 +55,7 @@ type Reconciler struct {
 		List(context.Context, client.ObjectList, ...client.ListOption) error
 	}
 	Writer interface {
+		Apply(context.Context, apiruntime.ApplyConfiguration, ...client.ApplyOption) error
 		Delete(context.Context, client.Object, ...client.DeleteOption) error
 		DeleteAllOf(context.Context, client.Object, ...client.DeleteAllOfOption) error
 		Patch(context.Context, client.Object, client.Patch, ...client.PatchOption) error
@@ -165,7 +167,8 @@ func (r *Reconciler) Reconcile(
 		err                          error
 		backupsSpecFound             bool
 		backupsReconciliationAllowed bool
-		dedicatedSnapshotPVC         *corev1.PersistentVolumeClaim
+		// COMMENTED OUT FOR POC
+		// dedicatedSnapshotPVC         *corev1.PersistentVolumeClaim
 	)
 
 	patchClusterStatus := func() error {
@@ -348,12 +351,14 @@ func (r *Reconciler) Reconcile(
 			}
 		}
 	}
-	if err == nil {
-		dedicatedSnapshotPVC, err = r.reconcileDedicatedSnapshotVolume(ctx, cluster, clusterVolumes)
-	}
-	if err == nil {
-		err = r.reconcileVolumeSnapshots(ctx, cluster, dedicatedSnapshotPVC)
-	}
+
+	// COMMENTED OUT FOR POC
+	// if err == nil {
+	// 	dedicatedSnapshotPVC, err = r.reconcileDedicatedSnapshotVolume(ctx, cluster, clusterVolumes)
+	// }
+	// if err == nil {
+	// 	err = r.reconcileVolumeSnapshots(ctx, cluster, dedicatedSnapshotPVC)
+	// }
 	if err == nil {
 		err = r.reconcilePGBouncer(ctx, cluster, instances, primaryCertificate, rootCA)
 	}

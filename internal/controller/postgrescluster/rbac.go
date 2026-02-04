@@ -6,10 +6,14 @@ package postgrescluster
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
+	rbacv1ac "k8s.io/client-go/applyconfigurations/rbac/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crunchydata/postgres-operator/internal/initialize"
 	"github.com/crunchydata/postgres-operator/internal/naming"
@@ -83,13 +87,48 @@ func (r *Reconciler) reconcileInstanceRBAC(
 	role.Rules = patroni.Permissions(cluster)
 
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, account))
+		applyConfig, err := corev1ac.ExtractServiceAccount(account, naming.FieldManager)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 	}
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, role))
+		applyConfig2, err := rbacv1ac.ExtractRole(role, naming.FieldManager)
+
+		fmt.Println("applyConfig2.RoleRef.Kind", *applyConfig2.Kind)
+
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig2, client.ForceOwnership))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 	}
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, binding))
+
+		fmt.Println("STARTING BINDING")
+		fmt.Println(binding.RoleRef.Kind)
+		fmt.Println("ENDING BINDING")
+		applyConfig3, err := rbacv1ac.ExtractRoleBinding(binding, naming.FieldManager)
+		applyConfig3.RoleRef = &rbacv1ac.RoleRefApplyConfiguration{
+			Kind:     &binding.RoleRef.Kind,
+			Name:     &binding.RoleRef.Name,
+			APIGroup: &binding.RoleRef.APIGroup,
+		}
+		fmt.Println("applyConfig3", applyConfig3)
+		fmt.Println("applyConfig3.RoleRef.Kind", applyConfig3.RoleRef.Kind)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig3, client.ForceOwnership))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 	}
 
 	return account, err

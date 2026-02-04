@@ -173,6 +173,10 @@ const (
 	RestoreConfigCopySuffix = "%s-restorecopy-%d"
 )
 
+const (
+	FieldManager = "pgo-operator"
+)
+
 // AsObjectKey converts the ObjectMeta API type to a client.ObjectKey.
 // When you have a client.Object, use client.ObjectKeyFromObject() instead.
 func AsObjectKey(m metav1.ObjectMeta) client.ObjectKey {

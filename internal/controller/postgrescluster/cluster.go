@@ -14,6 +14,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crunchydata/postgres-operator/internal/collector"
 	"github.com/crunchydata/postgres-operator/internal/initialize"
@@ -48,7 +50,14 @@ func (r *Reconciler) reconcileClusterConfigMap(
 			clusterConfigMap, r.patroniLogSize(ctx, cluster))
 	}
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, clusterConfigMap))
+		applyConfig, err := corev1ac.ExtractConfigMap(clusterConfigMap, naming.FieldManager)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 	}
 
 	return clusterConfigMap, err
@@ -111,7 +120,14 @@ func (r *Reconciler) reconcileClusterPodService(
 	}
 
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, clusterPodService))
+		applyConfig, err := corev1ac.ExtractService(clusterPodService, naming.FieldManager)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 	}
 
 	return clusterPodService, err
@@ -202,10 +218,24 @@ func (r *Reconciler) reconcileClusterPrimaryService(
 	service, endpoints, err := r.generateClusterPrimaryService(cluster, leader)
 
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, service))
+		applyConfig, err := corev1ac.ExtractService(service, naming.FieldManager)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 	}
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, endpoints))
+		applyConfig, err := corev1ac.ExtractEndpoints(endpoints, naming.FieldManager)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 	}
 	return service, err
 }
@@ -303,7 +333,14 @@ func (r *Reconciler) reconcileClusterReplicaService(
 	service, err := r.generateClusterReplicaService(cluster)
 
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, service))
+		applyConfig, err := corev1ac.ExtractService(service, naming.FieldManager)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 	}
 	return service, err
 }

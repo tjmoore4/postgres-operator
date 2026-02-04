@@ -15,6 +15,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
+	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crunchydata/postgres-operator/internal/config"
@@ -104,7 +106,14 @@ func (r *Reconciler) reconcilePGAdminConfigMap(
 	}
 
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, configmap))
+		applyConfig, err := corev1ac.ExtractConfigMap(configmap, naming.FieldManager)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 	}
 	return configmap, err
 }
@@ -220,7 +229,14 @@ func (r *Reconciler) reconcilePGAdminService(
 	}
 
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, service))
+		applyConfig, err := corev1ac.ExtractService(service, naming.FieldManager)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 	}
 	return service, err
 }
@@ -367,7 +383,11 @@ func (r *Reconciler) reconcilePGAdminStatefulSet(
 	// volume mount to all containers included within that spec
 	AddTMPEmptyDir(&sts.Spec.Template)
 
-	return errors.WithStack(r.apply(ctx, sts))
+	applyConfig, err := appsv1ac.ExtractStatefulSet(sts, naming.FieldManager)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	return errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
 }
 
 // +kubebuilder:rbac:groups="",resources="persistentvolumeclaims",verbs={create,patch}
@@ -410,8 +430,13 @@ func (r *Reconciler) reconcilePGAdminDataVolume(
 	err := errors.WithStack(r.setControllerReference(cluster, pvc))
 
 	if err == nil {
-		err = r.handlePersistentVolumeClaimError(cluster,
-			errors.WithStack(r.apply(ctx, pvc)))
+		applyConfig, applyErr := corev1ac.ExtractPersistentVolumeClaim(pvc, naming.FieldManager)
+		if applyErr != nil {
+			err = r.handlePersistentVolumeClaimError(cluster, errors.WithStack(applyErr))
+		} else {
+			err = r.handlePersistentVolumeClaimError(cluster,
+				errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership)))
+		}
 	}
 
 	return pvc, err

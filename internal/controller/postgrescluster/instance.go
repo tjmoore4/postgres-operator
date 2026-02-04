@@ -21,6 +21,9 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/sets"
+	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
+	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
+	policyv1ac "k8s.io/client-go/applyconfigurations/policy/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -1249,7 +1252,14 @@ func (r *Reconciler) reconcileInstance(
 	}
 
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, instance))
+		applyConfig, err := appsv1ac.ExtractStatefulSet(instance, naming.FieldManager)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return errors.WithStack(err)
+		}
 	}
 	if err == nil {
 		log.V(1).Info("reconciled instance", "instance", instance.Name)
@@ -1446,7 +1456,14 @@ func (r *Reconciler) reconcileInstanceConfigMap(
 		err = patroni.InstanceConfigMap(ctx, cluster, spec, instanceConfigMap)
 	}
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, instanceConfigMap))
+		applyConfig, err := corev1ac.ExtractConfigMap(instanceConfigMap, naming.FieldManager)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 	}
 
 	return instanceConfigMap, err
@@ -1509,7 +1526,14 @@ func (r *Reconciler) reconcileInstanceCertificates(
 			instanceCerts)
 	}
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, instanceCerts))
+		applyConfig, err := corev1ac.ExtractSecret(instanceCerts, naming.FieldManager)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
 	}
 
 	return instanceCerts, err
@@ -1560,7 +1584,14 @@ func (r *Reconciler) reconcileInstanceSetPodDisruptionBudget(
 	}
 
 	if err == nil {
-		err = errors.WithStack(r.apply(ctx, pdb))
+		applyConfig, err := policyv1ac.ExtractPodDisruptionBudget(pdb, naming.FieldManager)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		err = errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership))
+		if err != nil {
+			return errors.WithStack(err)
+		}
 	}
 	return err
 }

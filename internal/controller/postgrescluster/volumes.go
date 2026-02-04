@@ -16,6 +16,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	batchv1ac "k8s.io/client-go/applyconfigurations/batch/v1"
+	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/crunchydata/postgres-operator/internal/config"
@@ -255,25 +257,29 @@ func (r *Reconciler) configureExistingPGVolumes(
 				Spec: cluster.Spec.InstanceSets[0].DataVolumeClaimSpec.AsPersistentVolumeClaimSpec(),
 			}
 
-			volume.Labels = map[string]string{
-				naming.LabelCluster:     cluster.Name,
-				naming.LabelInstanceSet: cluster.Spec.InstanceSets[0].Name,
-				naming.LabelInstance:    instanceName,
-				naming.LabelRole:        naming.RolePostgresData,
-				naming.LabelData:        naming.DataPostgres,
-			}
-			volume.SetGroupVersionKind(corev1.SchemeGroupVersion.
-				WithKind("PersistentVolumeClaim"))
-			if err := r.setControllerReference(cluster, volume); err != nil {
-				return volumes, err
-			}
-			if err := errors.WithStack(r.apply(ctx, volume)); err != nil {
-				return volumes, err
-			}
-			volumes = append(volumes, volume)
+		volume.Labels = map[string]string{
+			naming.LabelCluster:     cluster.Name,
+			naming.LabelInstanceSet: cluster.Spec.InstanceSets[0].Name,
+			naming.LabelInstance:    instanceName,
+			naming.LabelRole:        naming.RolePostgresData,
+			naming.LabelData:        naming.DataPostgres,
 		}
+		volume.SetGroupVersionKind(corev1.SchemeGroupVersion.
+			WithKind("PersistentVolumeClaim"))
+		if err := r.setControllerReference(cluster, volume); err != nil {
+			return volumes, err
+		}
+		applyConfig, err := corev1ac.ExtractPersistentVolumeClaim(volume, volume.Name)
+		if err != nil {
+			return volumes, errors.WithStack(err)
+		}
+		if err := errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership)); err != nil {
+			return volumes, err
+		}
+		volumes = append(volumes, volume)
 	}
-	return volumes, nil
+}
+return volumes, nil
 }
 
 // +kubebuilder:rbac:groups="",resources="persistentvolumeclaims",verbs={create,patch}
@@ -308,24 +314,28 @@ func (r *Reconciler) configureExistingPGWALVolume(
 			Spec: cluster.Spec.InstanceSets[0].DataVolumeClaimSpec.AsPersistentVolumeClaimSpec(),
 		}
 
-		volume.Labels = map[string]string{
-			naming.LabelCluster:     cluster.Name,
-			naming.LabelInstanceSet: cluster.Spec.InstanceSets[0].Name,
-			naming.LabelInstance:    instanceName,
-			naming.LabelRole:        naming.RolePostgresWAL,
-			naming.LabelData:        naming.DataPostgres,
-		}
-		volume.SetGroupVersionKind(corev1.SchemeGroupVersion.
-			WithKind("PersistentVolumeClaim"))
-		if err := r.setControllerReference(cluster, volume); err != nil {
-			return volumes, err
-		}
-		if err := errors.WithStack(r.apply(ctx, volume)); err != nil {
-			return volumes, err
-		}
-		volumes = append(volumes, volume)
+	volume.Labels = map[string]string{
+		naming.LabelCluster:     cluster.Name,
+		naming.LabelInstanceSet: cluster.Spec.InstanceSets[0].Name,
+		naming.LabelInstance:    instanceName,
+		naming.LabelRole:        naming.RolePostgresWAL,
+		naming.LabelData:        naming.DataPostgres,
 	}
-	return volumes, nil
+	volume.SetGroupVersionKind(corev1.SchemeGroupVersion.
+		WithKind("PersistentVolumeClaim"))
+	if err := r.setControllerReference(cluster, volume); err != nil {
+		return volumes, err
+	}
+	applyConfig, err := corev1ac.ExtractPersistentVolumeClaim(volume, volume.Name)
+	if err != nil {
+		return volumes, errors.WithStack(err)
+	}
+	if err := errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership)); err != nil {
+		return volumes, err
+	}
+	volumes = append(volumes, volume)
+}
+return volumes, nil
 }
 
 // +kubebuilder:rbac:groups="",resources="persistentvolumeclaims",verbs={create,patch}
@@ -363,19 +373,23 @@ func (r *Reconciler) configureExistingRepoVolumes(
 					VolumeClaimSpec.AsPersistentVolumeClaimSpec(),
 			}
 
-			//volume.ObjectMeta = naming.PGBackRestRepoVolume(cluster, cluster.Spec.Backups.PGBackRest.Repos[0].Name)
-			volume.SetGroupVersionKind(corev1.SchemeGroupVersion.
-				WithKind("PersistentVolumeClaim"))
-			if err := r.setControllerReference(cluster, volume); err != nil {
-				return volumes, err
-			}
-			if err := errors.WithStack(r.apply(ctx, volume)); err != nil {
-				return volumes, err
-			}
-			volumes = append(volumes, volume)
+		//volume.ObjectMeta = naming.PGBackRestRepoVolume(cluster, cluster.Spec.Backups.PGBackRest.Repos[0].Name)
+		volume.SetGroupVersionKind(corev1.SchemeGroupVersion.
+			WithKind("PersistentVolumeClaim"))
+		if err := r.setControllerReference(cluster, volume); err != nil {
+			return volumes, err
 		}
+		applyConfig, err := corev1ac.ExtractPersistentVolumeClaim(volume, volume.Name)
+		if err != nil {
+			return volumes, errors.WithStack(err)
+		}
+		if err := errors.WithStack(r.Writer.Apply(ctx, applyConfig, client.ForceOwnership)); err != nil {
+			return volumes, err
+		}
+		volumes = append(volumes, volume)
 	}
-	return volumes, nil
+}
+return volumes, nil
 }
 
 // +kubebuilder:rbac:groups="batch",resources="jobs",verbs={list}
@@ -549,7 +563,11 @@ echo "PG Data directory preparation complete"`, cluster.Name,
 	}
 
 	// server-side apply the backup Job intent
-	if err := r.apply(ctx, moveDirJob); err != nil {
+	applyConfig, err := batchv1ac.ExtractJob(moveDirJob, naming.MovePGDataDirJob(cluster).Name)
+	if err != nil {
+		return true, errors.WithStack(err)
+	}
+	if err := r.Writer.Apply(ctx, applyConfig, client.ForceOwnership); err != nil {
 		return true, errors.WithStack(err)
 	}
 
@@ -666,7 +684,11 @@ echo "PG WAL directory preparation complete"`, cluster.Name,
 	}
 
 	// server-side apply the backup Job intent
-	if err := r.apply(ctx, moveDirJob); err != nil {
+	applyConfig, err := batchv1ac.ExtractJob(moveDirJob, naming.MovePGWALDirJob(cluster).Name)
+	if err != nil {
+		return true, errors.WithStack(err)
+	}
+	if err := r.Writer.Apply(ctx, applyConfig, client.ForceOwnership); err != nil {
 		return true, errors.WithStack(err)
 	}
 
@@ -786,7 +808,11 @@ echo "Repo directory preparation complete"`, cluster.Name,
 	}
 
 	// server-side apply the backup Job intent
-	if err := r.apply(ctx, moveDirJob); err != nil {
+	applyConfig, err := batchv1ac.ExtractJob(moveDirJob, naming.MovePGBackRestRepoDirJob(cluster).Name)
+	if err != nil {
+		return true, errors.WithStack(err)
+	}
+	if err := r.Writer.Apply(ctx, applyConfig, client.ForceOwnership); err != nil {
 		return true, errors.WithStack(err)
 	}
 	return true, nil
